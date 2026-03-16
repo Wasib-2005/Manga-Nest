@@ -1,237 +1,226 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useRef, useCallback, useEffect, useState } from "react";
 import {
-  View,
-  Image,
-  ScrollView,
-  TouchableOpacity,
-  Text,
-  ActivityIndicator,
-  Dimensions,
+  View, Image, ScrollView, FlatList,
+  ActivityIndicator, Dimensions, Animated,
 } from "react-native";
-import { MaterialCommunityIcons } from "@expo/vector-icons";
+
+export type ViewMode = "horizontal" | "autoplay" | "vertical";
 
 interface Props {
-  pages: string[];
-  initialPage: number;
-  onPageChange: (page: number) => void;
-  onHideToggle: () => void;
-  mode: "vertical" | "horizontal";
-  zoom: number;
-  autoPlay: boolean;
-  autoPlaySpeed: number;
+  pages:         string[];
+  initialPage:   number;
+  onPageChange:  (page: number) => void;
+  mode:          ViewMode;
+  autoPlay:      boolean;
+  autoPlaySpeed: number; // seconds per page
 }
+
+const { width: SW, height: SH } = Dimensions.get("window");
+
+// ─── Single zoomable page (pinch = photo-app zoom) ────────────────────────────
+// Named function inside React.memo fixes react/display-name eslint error
+const ZoomPage = React.memo(function ZoomPage({ uri }: { uri: string }) {
+  return (
+    <ScrollView
+      style={{ width: SW, height: SH }}
+      contentContainerStyle={{ width: SW, height: SH }}
+      maximumZoomScale={5}
+      minimumZoomScale={1}
+      showsHorizontalScrollIndicator={false}
+      showsVerticalScrollIndicator={false}
+      centerContent
+      bouncesZoom
+    >
+      <Image
+        source={{ uri: `file://${uri}` }}
+        style={{ width: SW, height: SH }}
+        resizeMode="contain"
+      />
+    </ScrollView>
+  );
+});
+
+// ─── PageViewer ───────────────────────────────────────────────────────────────
 
 export const PageViewer = ({
   pages,
   initialPage,
   onPageChange,
-  onHideToggle,
   mode,
-  zoom,
   autoPlay,
   autoPlaySpeed,
 }: Props) => {
-  const [currentPage, setCurrentPage] = useState(initialPage);
-  const [showControls, setShowControls] = useState(true);
-  const scrollViewRef = useRef<ScrollView>(null);
-  const autoPlayRef = useRef<number | null>(null); // ✅ FIXED: setInterval returns number
+  const flatRef      = useRef<FlatList>(null);
+  const currentRef   = useRef(initialPage);
+  const timerRef     = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const screenWidth = Dimensions.get("window").width;
-  const screenHeight = Dimensions.get("window").height;
+  // ── Crossfade state (autoplay mode) ─────────────────────────────────────
+  // Double-buffer: two image slots alternating so we never show a black frame
+  const [crossPage,  setCrossPage]  = useState(initialPage);
+  const crossPageRef                = useRef(initialPage);
+  const [slot,       setSlot]       = useState<0 | 1>(0);
+  const [slotPages,  setSlotPages]  = useState([initialPage, initialPage]);
+  const opacityA     = useRef(new Animated.Value(1)).current; // slot 0
+  const opacityB     = useRef(new Animated.Value(0)).current; // slot 1
+  const opacities    = [opacityA, opacityB];
+  const crossRunning = useRef(false);
 
-  // Handle autoplay
+  // ── Sync initialPage when the reader opens a new chapter ────────────────
   useEffect(() => {
-    if (!autoPlay || pages.length === 0) {
-      if (autoPlayRef.current !== null) {
-        clearInterval(autoPlayRef.current);
-        autoPlayRef.current = null;
-      }
-      return;
-    }
+    currentRef.current   = initialPage;
+    crossPageRef.current = initialPage;
+    setCrossPage(initialPage);
+    setSlotPages([initialPage, initialPage]);
+    opacityA.setValue(1);
+    opacityB.setValue(0);
+    setSlot(0);
 
-    if (autoPlayRef.current !== null) {
-      clearInterval(autoPlayRef.current);
-    }
-
-    const interval = 1000 / autoPlaySpeed;
-    autoPlayRef.current = setInterval(() => {
-      setCurrentPage((prev) => {
-        const next = prev + 1;
-        return next >= pages.length ? 0 : next;
-      });
-    }, interval);
-
-    return () => {
-      if (autoPlayRef.current !== null) {
-        clearInterval(autoPlayRef.current);
-        autoPlayRef.current = null;
-      }
-    };
-  }, [autoPlay, autoPlaySpeed, pages.length]);
-
-  useEffect(() => {
-    onPageChange(currentPage);
-  }, [currentPage, onPageChange]);
-
-  useEffect(() => {
-    if (mode === "horizontal" && scrollViewRef.current) {
+    if (mode === "horizontal" && pages.length > 0) {
       setTimeout(() => {
-        scrollViewRef.current?.scrollTo({
-          x: currentPage * screenWidth,
-          animated: false,
-        });
-      }, 0);
+        flatRef.current?.scrollToIndex({ index: Math.min(initialPage, pages.length - 1), animated: false });
+      }, 80);
     }
-  }, [currentPage, mode, screenWidth]);
+  }, [pages.length, initialPage]);
 
-  const toggleControls = () => {
-    setShowControls(!showControls);
-  };
+  // ── Crossfade advance (used by both autoplay timer and manual) ───────────
+  const crossfadeAdvance = useCallback(() => {
+    if (crossRunning.current || pages.length === 0) return;
+    crossRunning.current = true;
+
+    const nextPage    = (crossPageRef.current + 1) % pages.length;
+    const nextSlot    = slot === 0 ? 1 : 0;
+
+    // Load the next image into the inactive slot first
+    setSlotPages(prev => {
+      const copy = [...prev] as [number, number];
+      copy[nextSlot] = nextPage;
+      return copy;
+    });
+
+    // Small delay lets React render the new image into the inactive slot
+    setTimeout(() => {
+      Animated.parallel([
+        Animated.timing(opacities[slot],     { toValue: 0, duration: 450, useNativeDriver: true }),
+        Animated.timing(opacities[nextSlot], { toValue: 1, duration: 450, useNativeDriver: true }),
+      ]).start(() => {
+        crossPageRef.current = nextPage;
+        setCrossPage(nextPage);
+        setSlot(nextSlot as 0 | 1);
+        onPageChange(nextPage);
+        crossRunning.current = false;
+      });
+    }, 60);
+  }, [slot, pages.length, opacities, onPageChange]);
+
+  // ── Autoplay timer ────────────────────────────────────────────────────────
+  useEffect(() => {
+    if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
+    if (!autoPlay || pages.length === 0) return;
+
+    const ms = Math.max(300, autoPlaySpeed * 1000);
+
+    if (mode === "autoplay") {
+      // Crossfade mode: timer drives crossfadeAdvance
+      timerRef.current = setInterval(crossfadeAdvance, ms);
+    } else if (mode === "horizontal") {
+      // Slide mode: timer scrolls FlatList
+      timerRef.current = setInterval(() => {
+        const next = (currentRef.current + 1) % pages.length;
+        flatRef.current?.scrollToIndex({ index: next, animated: true });
+        currentRef.current = next;
+        onPageChange(next);
+      }, ms);
+    }
+    // vertical + autoPlay: scroll down by one page height
+    else if (mode === "vertical") {
+      const vertRef = flatRef;
+      timerRef.current = setInterval(() => {
+        const next = (currentRef.current + 1) % pages.length;
+        vertRef.current?.scrollToIndex({ index: next, animated: true });
+        currentRef.current = next;
+        onPageChange(next);
+      }, ms);
+    }
+
+    return () => { if (timerRef.current) clearInterval(timerRef.current); };
+  }, [autoPlay, autoPlaySpeed, mode, pages.length, crossfadeAdvance]);
+
+  // ── Horizontal / Vertical FlatList helpers ────────────────────────────────
+  const onMomentumEnd = useCallback((e: any) => {
+    const offset = mode === "horizontal"
+      ? e.nativeEvent.contentOffset.x
+      : e.nativeEvent.contentOffset.y;
+    const dim  = mode === "horizontal" ? SW : SH;
+    const page = Math.round(offset / dim);
+    if (page !== currentRef.current) {
+      currentRef.current = page;
+      onPageChange(page);
+    }
+  }, [mode, onPageChange]);
+
+  const getItemLayout = useCallback((_: any, index: number) => {
+    const dim = mode === "horizontal" ? SW : SH;
+    return { length: dim, offset: dim * index, index };
+  }, [mode]);
+
+  const renderItem = useCallback(({ item }: { item: string }) => (
+    <ZoomPage uri={item} />
+  ), []);
+
+  // ─────────────────────────────────────────────────────────────────────────
 
   if (pages.length === 0) {
     return (
-      <View className="flex-1 bg-gray-950 justify-center items-center">
-        <ActivityIndicator size="large" color="#10b981" />
+      <View style={{ flex: 1, backgroundColor: "#030712", justifyContent: "center", alignItems: "center" }}>
+        <ActivityIndicator size="large" color="#38D926" />
       </View>
     );
   }
 
+  // ── Mode 2: Crossfade autoplay ────────────────────────────────────────────
+  if (mode === "autoplay") {
+    return (
+      <View style={{ flex: 1, backgroundColor: "#030712" }}>
+        {/* Slot 0 */}
+        <Animated.View style={{ position: "absolute", inset: 0, opacity: opacityA }}>
+          <Image
+            source={{ uri: `file://${pages[slotPages[0]]}` }}
+            style={{ width: SW, height: SH }}
+            resizeMode="contain"
+          />
+        </Animated.View>
+        {/* Slot 1 */}
+        <Animated.View style={{ position: "absolute", inset: 0, opacity: opacityB }}>
+          <Image
+            source={{ uri: `file://${pages[slotPages[1]]}` }}
+            style={{ width: SW, height: SH }}
+            resizeMode="contain"
+          />
+        </Animated.View>
+      </View>
+    );
+  }
+
+  // ── Mode 1 & 3: Horizontal swipe or Vertical scroll ───────────────────────
   return (
-    <View className="flex-1 bg-gray-950">
-      {mode === "vertical" ? (
-        // Vertical scroll
-        <ScrollView
-          scrollEnabled={!autoPlay}
-          contentContainerStyle={{
-            alignItems: "center",
-            paddingVertical: 12,
-            backgroundColor: "#030712",
-          }}
-          showsVerticalScrollIndicator={false}
-        >
-          {pages.map((pageUri, idx) => (
-            <TouchableOpacity
-              key={idx}
-              onPress={toggleControls}
-              activeOpacity={1}
-              style={{ transform: [{ scale: zoom }] }}
-            >
-              <Image
-                source={{ uri: `file://${pageUri}` }}
-                style={{
-                  width: screenWidth * 0.95,
-                  height: screenHeight * 0.8,
-                }}
-                resizeMode="contain"
-              />
-            </TouchableOpacity>
-          ))}
-        </ScrollView>
-      ) : (
-        // Horizontal swipe
-        <ScrollView
-          ref={scrollViewRef}
-          horizontal
-          pagingEnabled
-          scrollEnabled={!autoPlay}
-          contentContainerStyle={{
-            alignItems: "center",
-          }}
-          showsHorizontalScrollIndicator={false}
-          snapToInterval={screenWidth}
-          decelerationRate="fast"
-        >
-          {pages.map((pageUri, idx) => (
-            <TouchableOpacity
-              key={idx}
-              onPress={toggleControls}
-              activeOpacity={1}
-              style={{ width: screenWidth, height: screenHeight }}
-            >
-              <Image
-                source={{ uri: `file://${pageUri}` }}
-                style={{
-                  width: "100%",
-                  height: "100%",
-                  transform: [{ scale: zoom }],
-                }}
-                resizeMode="contain"
-              />
-            </TouchableOpacity>
-          ))}
-        </ScrollView>
-      )}
-
-      {/* Modern Controls Overlay */}
-      {showControls && (
-        <View className="absolute inset-0 bg-gradient-to-b from-black/40 via-transparent to-black/40 flex justify-between p-4">
-          {/* Top Bar */}
-          <View className="flex-row justify-between items-center">
-            <TouchableOpacity
-              onPress={onHideToggle}
-              className="bg-white/10 backdrop-blur-md rounded-full p-2.5 border border-white/20"
-            >
-              <MaterialCommunityIcons name="eye-off" size={20} color="white" />
-            </TouchableOpacity>
-
-            <View className="bg-white/10 backdrop-blur-md rounded-full px-4 py-2 border border-white/20">
-              <Text className="text-white font-semibold text-sm">
-                {currentPage + 1}/{pages.length}
-              </Text>
-            </View>
-
-            <TouchableOpacity
-              onPress={toggleControls}
-              className="bg-white/10 backdrop-blur-md rounded-full p-2.5 border border-white/20"
-            >
-              <MaterialCommunityIcons name="close" size={20} color="white" />
-            </TouchableOpacity>
-          </View>
-
-          {/* Bottom Bar */}
-          <View className="flex-row justify-center items-center gap-3 bg-white/10 backdrop-blur-md rounded-2xl p-3 border border-white/20">
-            {mode === "horizontal" && (
-              <>
-                <TouchableOpacity
-                  onPress={() => setCurrentPage(Math.max(0, currentPage - 1))}
-                  disabled={currentPage === 0}
-                  className="p-2.5 rounded-full bg-white/10"
-                >
-                  <MaterialCommunityIcons
-                    name="chevron-left"
-                    size={24}
-                    color={currentPage === 0 ? "#666" : "#10b981"}
-                  />
-                </TouchableOpacity>
-              </>
-            )}
-
-            <View className="flex-1 mx-2">
-              <Text className="text-white text-xs text-center font-medium">
-                Page {currentPage + 1}
-              </Text>
-            </View>
-
-            {mode === "horizontal" && (
-              <>
-                <TouchableOpacity
-                  onPress={() =>
-                    setCurrentPage(Math.min(pages.length - 1, currentPage + 1))
-                  }
-                  disabled={currentPage === pages.length - 1}
-                  className="p-2.5 rounded-full bg-white/10"
-                >
-                  <MaterialCommunityIcons
-                    name="chevron-right"
-                    size={24}
-                    color={currentPage === pages.length - 1 ? "#666" : "#10b981"}
-                  />
-                </TouchableOpacity>
-              </>
-            )}
-          </View>
-        </View>
-      )}
-    </View>
+    <FlatList
+      ref={flatRef}
+      data={pages}
+      keyExtractor={(_, i) => String(i)}
+      renderItem={renderItem}
+      horizontal={mode === "horizontal"}
+      pagingEnabled
+      showsHorizontalScrollIndicator={false}
+      showsVerticalScrollIndicator={false}
+      getItemLayout={getItemLayout}
+      initialScrollIndex={Math.min(initialPage, pages.length - 1)}
+      onMomentumScrollEnd={onMomentumEnd}
+      scrollEnabled={!autoPlay}
+      removeClippedSubviews
+      windowSize={5}
+      maxToRenderPerBatch={3}
+      initialNumToRender={3}
+      style={{ backgroundColor: "#030712" }}
+    />
   );
 };
