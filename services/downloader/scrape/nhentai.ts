@@ -1,15 +1,18 @@
 import type { MangaMeta } from "../types/manga";
 
+/**
+ * nhentai: auto-fills all metadata from the API.
+ * MangaDex: metadata is left blank for the user to fill in manually.
+ */
 export const scrapeNhentai = async (url: string): Promise<MangaMeta> => {
   const match = url.match(/\/g\/(\d+)/);
   if (!match) throw new Error("Invalid nhentai URL");
-
   const galleryId = match[1];
+
   const res = await fetch(`https://nhentai.net/api/gallery/${galleryId}`, {
     headers: { "User-Agent": "Mozilla/5.0" },
   });
   if (!res.ok) throw new Error("nhentai API error");
-
   const data = await res.json();
 
   const name   = data.title.pretty || data.title.english || `nhentai-${galleryId}`;

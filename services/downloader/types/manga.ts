@@ -4,8 +4,10 @@ export interface MangaMeta {
   tags:      string[];
   genres:    string[];
   ep:        string;
-  source:    "nhentai" | "mangadex";
+  source:    "nhentai" | "mangadex" | "sequential";
   imageUrls: string[];
+  /** Sequential only — original image URL used to scan during download */
+  scanUrl?:  string;
 }
 
 export interface EditedMeta {
@@ -22,7 +24,6 @@ export interface DownloadProgress {
   total:   number;
 }
 
-// ✅ FIX: Phase was used in UI components but never defined
 export type Phase =
   | "idle"
   | "looking"

@@ -1,14 +1,16 @@
 import { Platform, PermissionsAndroid } from "react-native";
 import { Directory, File, Paths } from "expo-file-system";
 import type { MangaMeta, EditedMeta, DownloadProgress } from "./types/manga";
+import { runSequentialScan } from "./scrape/sequential";
 
 const MAX_RETRY = 3;
 
 const IS_PRODUCTION = process.env.PRODUCTION === "1";
 
 const HEADERS: Record<MangaMeta["source"], Record<string, string>> = {
-  mangadex: { "User-Agent": "Mozilla/5.0", "Referer": "https://mangadex.org/" },
-  nhentai:  { "User-Agent": "Mozilla/5.0", "Referer": "https://nhentai.net/"  },
+  mangadex:   { "User-Agent": "Mozilla/5.0", "Referer": "https://mangadex.org/" },
+  nhentai:    { "User-Agent": "Mozilla/5.0", "Referer": "https://nhentai.net/"  },
+  sequential: { "User-Agent": "Mozilla/5.0" },
 };
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -20,7 +22,7 @@ interface IndexEntry {
   addedAt: string;
 }
 
-// ─── In-memory lock ───────────────────────────────────────────────────────────
+// ─── Lock ─────────────────────────────────────────────────────────────────────
 
 let _busy = false;
 
@@ -47,23 +49,20 @@ function uniqueUid(existing: IndexEntry[]): string {
   return uid;
 }
 
-// ─── Registry helpers ─────────────────────────────────────────────────────────
+// ─── Registry ─────────────────────────────────────────────────────────────────
 
 async function readIndex(root: Directory): Promise<IndexEntry[]> {
   try {
     const f = new File(`${root.uri}/index.json`);
     if (!f.exists) return [];
-
     const parsed = JSON.parse(await f.text());
-    if (!Array.isArray(parsed)) throw new Error("registry not an array");
-
-    // Prune entries whose uid folder was deleted outside the app
+    if (!Array.isArray(parsed)) throw new Error("not an array");
     return parsed.filter((e: IndexEntry) => {
       try { return new Directory(root, e.uid).exists; }
       catch { return false; }
     });
   } catch (err) {
-    console.warn("⚠️  index.json unreadable — rebuilding from disk:", err);
+    console.warn("⚠️  index.json unreadable — rebuilding:", err);
     return rebuildIndexAsync(root);
   }
 }
@@ -74,35 +73,21 @@ async function rebuildIndexAsync(root: Directory): Promise<IndexEntry[]> {
     for (const item of root.list()) {
       if (!(item instanceof Directory)) continue;
       try {
-        const titleFile = new File(`${item.uri}/title.json`);
-        if (!titleFile.exists) continue;
-        const data: IndexEntry = JSON.parse(await titleFile.text());
+        const f = new File(`${item.uri}/title.json`);
+        if (!f.exists) continue;
+        const data: IndexEntry = JSON.parse(await f.text());
         if (data.uid && data.name && data.source) entries.push(data);
-      } catch { /* malformed title.json — skip */ }
+      } catch { /* skip */ }
     }
-  } catch { /* root may not exist yet */ }
+  } catch { /* root not yet created */ }
   return entries;
 }
 
-/**
- * Crash-safe write:
- *   1. Write to index.json.tmp
- *   2. Delete index.json if it exists        ← ✅ FIX for FileAlreadyExistsException
- *   3. Move tmp → index.json
- *
- * If the app crashes between step 2 and 3 the tmp file is left behind.
- * readIndex() handles that by falling back to rebuildIndexAsync().
- */
 async function writeIndex(root: Directory, entries: IndexEntry[]): Promise<void> {
   const tmp  = new File(`${root.uri}/index.json.tmp`);
   const real = new File(`${root.uri}/index.json`);
-
   await tmp.write(JSON.stringify(entries, null, 2));
-
-  // ✅ FIX: expo-file-system File.move() throws FileAlreadyExistsException if
-  // the destination already exists — delete it first.
   if (real.exists) real.delete();
-
   await tmp.move(real);
 }
 
@@ -124,66 +109,70 @@ export async function requestSdcardPermission() {
     if (granted !== PermissionsAndroid.RESULTS.GRANTED) {
       throw new Error("Storage permission denied");
     }
-    console.log("✅ Storage permission granted");
   } catch (err) {
-    console.error("❌ Permission error:", err);
     throw err;
   }
 }
 
 // ─── Main downloader ──────────────────────────────────────────────────────────
 
-/**
- * Download one chapter of a manga.
- *
- * Folder layout:
- *   manga/
- *     index.json          ← name→uid registry
- *     <uid>/              ← e.g. sdse33er/
- *       title.json        ← title metadata (registry rebuild source)
- *       ep1/
- *         1.jpg … N.jpg
- *         info.json       ← written LAST = "chapter complete" marker
- *       ep2/
- *
- * Throws:
- *   "ALREADY_EXISTS"  — chapter already downloaded successfully
- *   "CANCELLED"       — cancelRef.cancelled set mid-download
- */
 export const downloadManga = async (
   meta:       MangaMeta,
   edited:     EditedMeta,
   onProgress: (p: DownloadProgress) => void,
-  cancelRef:  { cancelled: boolean }
+  cancelRef:  { cancelled: boolean },
+  onLog?:     (msg: string) => void    // used by sequential scan
 ): Promise<string> => {
 
-  const canonicalName = (edited.name || meta.name).trim();
-  const ep            = (edited.ep   || meta.ep  ).trim();
+  const log = (msg: string) => {
+    console.log(msg);
+    onLog?.(msg);
+  };
 
-  // ── 1. Ensure manga root ───────────────────────────────────────────────────
+  const canonicalName = edited.name.trim();
+  const ep            = edited.ep.trim();
+
+  // ── 1. Sequential scan (before anything else) ─────────────────────────────
+  // For sequential source, imageUrls is empty at this point.
+  // Run the scan now, while the user already has the modal open.
+  let resolvedMeta = meta;
+  if (meta.source === "sequential") {
+    if (!meta.scanUrl) throw new Error("Missing scan URL for sequential source");
+    onProgress({ message: "Scanning for images…", current: 0, total: 0 });
+    const urls = await runSequentialScan(
+      meta.scanUrl,
+      (msg) => {
+        log(msg);
+        onProgress({ message: msg, current: 0, total: 0 });
+      },
+      cancelRef
+    );
+    resolvedMeta = { ...meta, imageUrls: urls };
+  }
+
+  // ── 2. Ensure manga root ───────────────────────────────────────────────────
   const root = new Directory(Paths.document, "manga");
   if (!root.exists) root.create({ intermediates: true });
 
-  // ── 2. Registry lookup (locked against concurrent downloads) ──────────────
+  // ── 3. Registry lookup ────────────────────────────────────────────────────
   const { uid, isNewTitle } = await withLock(async () => {
     const entries  = await readIndex(root);
     const normName = canonicalName.toLowerCase();
     const existing = entries.find(e => e.name.toLowerCase() === normName);
 
     if (existing) {
-      // info.json only exists if that chapter completed successfully
       const done = new File(`${root.uri}/${existing.uid}/${ep}/info.json`);
       if (done.exists) throw new Error("ALREADY_EXISTS");
       return { uid: existing.uid, isNewTitle: false };
     }
 
     const newUid = uniqueUid(entries);
-    entries.push({ uid: newUid, name: canonicalName, source: meta.source, addedAt: new Date().toISOString() });
+    entries.push({ uid: newUid, name: canonicalName, source: resolvedMeta.source, addedAt: new Date().toISOString() });
     await writeIndex(root, entries);
     return { uid: newUid, isNewTitle: true };
   });
 
-  // ── 3. Build directory tree ────────────────────────────────────────────────
+  // ── 4. Directory tree ─────────────────────────────────────────────────────
   const titleDir   = new Directory(root,     uid);
   const chapterDir = new Directory(titleDir, ep);
 
@@ -193,27 +182,25 @@ export const downloadManga = async (
   const titleFile = new File(`${titleDir.uri}/title.json`);
   if (!titleFile.exists) {
     await titleFile.write(JSON.stringify(
-      { uid, name: canonicalName, source: meta.source, addedAt: new Date().toISOString() },
+      { uid, name: canonicalName, source: resolvedMeta.source, addedAt: new Date().toISOString() },
       null, 2
     ));
   }
 
-  console.log(`📁 uid: ${uid}  («${canonicalName}»)`);
-  console.log("📁 chapter path:", chapterDir.uri);
-  console.log(IS_PRODUCTION ? "MODE: PRODUCTION" : "MODE: DEV");
+  log(`📁 uid: ${uid}  («${canonicalName}»)`);
+  log(`📁 path: ${chapterDir.uri}`);
 
-  // ── 4. Download pages ──────────────────────────────────────────────────────
+  // ── 5. Download pages ─────────────────────────────────────────────────────
   try {
-    for (let i = 0; i < meta.imageUrls.length; i++) {
+    for (let i = 0; i < resolvedMeta.imageUrls.length; i++) {
       if (cancelRef.cancelled) throw new Error("CANCELLED");
 
-      const url  = meta.imageUrls[i];
+      const url  = resolvedMeta.imageUrls[i];
       const ext  = url.split(".").pop()?.split("?")[0] || "jpg";
       const file = new File(`${chapterDir.uri}/${i + 1}.${ext}`);
 
-      // Skip pages already on disk — makes interrupted downloads resumable
       if (file.exists) {
-        onProgress({ message: `${i + 1}.${ext} (resumed)`, current: i + 1, total: meta.imageUrls.length });
+        onProgress({ message: `${i + 1}.${ext} (resumed)`, current: i + 1, total: resolvedMeta.imageUrls.length });
         continue;
       }
 
@@ -222,12 +209,9 @@ export const downloadManga = async (
 
       for (let attempt = 0; attempt < MAX_RETRY; attempt++) {
         try {
-          const res = await fetch(url, { headers: HEADERS[meta.source] });
+          const res = await fetch(url, { headers: HEADERS[resolvedMeta.source] });
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
-
-          const bytes = new Uint8Array(await res.arrayBuffer());
-          await file.write(bytes);
-
+          await file.write(new Uint8Array(await res.arrayBuffer()));
           saved = true;
           break;
         } catch (err) {
@@ -239,30 +223,28 @@ export const downloadManga = async (
 
       if (!saved) throw new Error(`Failed page ${i + 1}: ${lastError}`);
 
-      onProgress({ message: `${i + 1}.${ext}`, current: i + 1, total: meta.imageUrls.length });
-      console.log(`✅ page ${i + 1}/${meta.imageUrls.length}`);
+      onProgress({ message: `${i + 1}.${ext}`, current: i + 1, total: resolvedMeta.imageUrls.length });
     }
 
-    // ── 5. info.json last — marks chapter as complete ──────────────────────
-    const infoFile = new File(`${chapterDir.uri}/info.json`);
-    await infoFile.write(JSON.stringify({
+    // ── 6. info.json — completion marker ────────────────────────────────────
+    await new File(`${chapterDir.uri}/info.json`).write(JSON.stringify({
       uid,
       name:    canonicalName,
-      author:  edited.author  || meta.author,
+      author:  edited.author.trim(),
       tags:    edited.tags  .split(",").map(t => t.trim()).filter(Boolean),
       genres:  edited.genres.split(",").map(t => t.trim()).filter(Boolean),
       ep,
-      source:  meta.source,
-      pages:   meta.imageUrls.length,
+      source:  resolvedMeta.source,
+      pages:   resolvedMeta.imageUrls.length,
       savedAt: new Date().toISOString(),
     }, null, 2));
 
-    console.log("🎉 Done:", chapterDir.uri);
+    log(`🎉 Done: ${chapterDir.uri}`);
     return chapterDir.uri;
 
   } catch (err) {
     const isCancelled = err instanceof Error && err.message === "CANCELLED";
-    console.warn(isCancelled ? "🚫 Cancelled — cleaning up." : "❌ Failed — rolling back.", err);
+    console.warn(isCancelled ? "🚫 Cancelled." : "❌ Rolling back.", err);
 
     try { if (chapterDir.exists) chapterDir.delete(); } catch { /* ignore */ }
 
