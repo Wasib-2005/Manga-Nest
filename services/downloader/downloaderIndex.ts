@@ -8,7 +8,7 @@ export const lookupManga = async (url: string): Promise<MangaMeta> => {
   if (url.includes("mangadex.org"))   return scrapeMangaDex(url);    // fetch images, no meta
   if (SEQUENTIAL_PATTERN.test(url))   return scrapeSequential(url);  // instant, no scan yet
   throw new Error(
-    "Unsupported source — use nhentai.net, mangadex.org, or a direct image URL (e.g. .../05.jpg)"
+    "Unsupported source — mangadex.org, or a direct image URL (e.g. .../05.jpg)"
   );
 };
 

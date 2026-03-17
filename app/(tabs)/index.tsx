@@ -7,7 +7,7 @@ import {
   StatusBar,
   SafeAreaView,
   BackHandler,
-  Platform, // <-- Added BackHandler
+  Platform,
 } from "react-native";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { LibraryScreen } from "../../components/ui/reader/libraryScreen";
@@ -25,6 +25,8 @@ import {
   getReadingProgress,
   saveReadingProgress,
 } from "../../services/reader/readingProgressService";
+// Combined delete services
+import { deleteChapterFiles, deleteFullManga } from "../../services/reader/deleteManga"; 
 
 type Screen = "library" | "reader";
 
@@ -40,6 +42,7 @@ export default function ReaderScreen() {
   const [settingsVisible, setSettingsVisible] = useState(false);
   const [hideVisible, setHideVisible] = useState(false);
   const [nestTaps, setNestTaps] = useState(0);
+  const [refreshKey, setRefreshKey] = useState(0); 
 
   const handleNestTap = () => {
     const next = nestTaps + 1;
@@ -66,6 +69,40 @@ export default function ReaderScreen() {
     }
   };
 
+  // --- Deletion Logic ---
+
+  const onDeleteChapter = async (uid: string, ep: string) => {
+    try {
+      const wasFullMangaDeleted = await deleteChapterFiles(uid, ep);
+      if (wasFullMangaDeleted) {
+        // If the last chapter was deleted, we return to library
+        if (selectedManga?.uid === uid) {
+            setScreen("library");
+            setSelectedManga(null);
+        }
+      }
+      setRefreshKey(prev => prev + 1);
+    } catch (err) {
+      Alert.alert("Error", "Failed to delete chapter");
+    }
+  };
+
+  const onDeleteManga = async (uid: string) => {
+    try {
+      await deleteFullManga(uid);
+      if (selectedManga?.uid === uid) {
+        setScreen("library");
+        setSelectedManga(null);
+      }
+      // Force library reload
+      setRefreshKey(prev => prev + 1);
+    } catch (err) {
+      Alert.alert("Error", "Failed to delete manga from library");
+    }
+  };
+
+  // --- Persistence & Navigation ---
+
   useEffect(() => {
     if (selectedManga && selectedChapter && pages.length > 0) {
       saveReadingProgress(selectedManga.uid, selectedChapter, currentPage);
@@ -79,180 +116,83 @@ export default function ReaderScreen() {
     setPages([]);
     setNestTaps(0);
     setAutoPlay(false);
+    setRefreshKey(prev => prev + 1); 
   };
 
-  // 👇 ADDED: Hardware Back Button Listener 👇
   useEffect(() => {
     const backAction = () => {
-      // If we are currently reading, intercept the back button
       if (screen === "reader") {
         handleBack();
-        return true; // Returning true tells React Native we handled the back press
+        return true;
       }
-      // If we are in the library, let the system handle it (close app/go back)
       return false;
     };
-
-    const backHandler = BackHandler.addEventListener(
-      "hardwareBackPress",
-      backAction,
-    );
-
-    // Cleanup the event listener on unmount or when screen state changes
+    const backHandler = BackHandler.addEventListener("hardwareBackPress", backAction);
     return () => backHandler.remove();
   }, [screen]);
-  // 👆 END OF BACK HANDLER 👆
 
-  // ── Library ────────────────────────────────────────────────────────────────
+  // --- UI Render ---
+
   if (screen === "library") {
     return (
       <View style={{ flex: 1 }}>
         <StatusBar barStyle="light-content" backgroundColor="#030712" />
-        <LibraryScreen onSelectManga={handleSelectManga} hideMode={false} />
+        <LibraryScreen 
+          key={refreshKey} 
+          onSelectManga={handleSelectManga} 
+          onDeleteChapter={onDeleteChapter}
+          onDeleteManga={onDeleteManga} // Fixes the TS error
+          hideMode={false} 
+        />
         <TouchableOpacity
           activeOpacity={1}
           onPress={handleNestTap}
-          style={{
-            position: "absolute",
-            top: 0,
-            left: 0,
-            right: 0,
-            height: 48,
-          }}
+          style={{ position: "absolute", top: 0, left: 0, right: 0, height: 48 }}
         />
-        <HiddenMangaModal
-          visible={hideVisible}
-          onClose={() => setHideVisible(false)}
-        />
+        <HiddenMangaModal visible={hideVisible} onClose={() => setHideVisible(false)} />
       </View>
     );
   }
 
-  // ── Reader ─────────────────────────────────────────────────────────────────
   return (
-    <View
-      style={{
-        flex: 1,
-        backgroundColor: "#030712",
-        // This adds padding only on Android if needed, iOS is handled by SafeAreaView
-        paddingTop: Platform.OS === "android" ? StatusBar.currentHeight : 0,
-      }}
-    >
+    <View style={{ flex: 1, backgroundColor: "#030712", paddingTop: Platform.OS === "android" ? StatusBar.currentHeight : 0 }}>
       <StatusBar barStyle="light-content" backgroundColor="#030912" />
-
-      {/* Header: back | title+chapter | page count | settings */}
       <SafeAreaView style={{ backgroundColor: "#030912" }}>
-        <View
-          style={{
-            flexDirection: "row",
-            alignItems: "center",
-            paddingHorizontal: 12,
-            paddingVertical: 10,
-            borderBottomWidth: 1,
-            borderBottomColor: "#0a0e17",
-            gap: 10,
-          }}
-        >
-          <TouchableOpacity
-            onPress={handleBack}
-            style={{ padding: 6, borderRadius: 8, backgroundColor: "#0a0e17" }}
-            hitSlop={{ top: 8, right: 8, bottom: 8, left: 8 }}
-          >
-            <MaterialCommunityIcons
-              name="arrow-left"
-              size={20}
-              color="#f1f5f9"
-            />
+        <View style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: 12, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: "#0a0e17", gap: 10 }}>
+          <TouchableOpacity onPress={handleBack} style={{ padding: 6, borderRadius: 8, backgroundColor: "#0a0e17" }}>
+            <MaterialCommunityIcons name="arrow-left" size={20} color="#f1f5f9" />
           </TouchableOpacity>
-
           <View style={{ flex: 1 }}>
-            <Text
-              style={{ color: "#f1f5f9", fontWeight: "700", fontSize: 14 }}
-              numberOfLines={1}
-            >
-              {selectedManga?.name}
-            </Text>
-            {selectedChapter ? (
-              <Text
-                style={{ color: "#334155", fontSize: 11 }}
-                numberOfLines={1}
-              >
-               Chapter: {selectedChapter}
-              </Text>
-            ) : null}
+            <Text style={{ color: "#f1f5f9", fontWeight: "700", fontSize: 14 }} numberOfLines={1}>{selectedManga?.name}</Text>
+            {selectedChapter && <Text style={{ color: "#38D926", fontSize: 11 }} numberOfLines={1}>Chapter: {selectedChapter}</Text>}
           </View>
-
-          <View
-            style={{
-              backgroundColor: "#0a0e17",
-              borderRadius: 8,
-              paddingHorizontal: 10,
-              paddingVertical: 5,
-              borderWidth: 1,
-              borderColor: "#141c2b",
-            }}
-          >
-            <Text style={{ color: "#94a3b8", fontSize: 13, fontWeight: "600" }}>
-              {currentPage + 1}
-              <Text style={{ color: "#334155" }}> / {pages.length}</Text>
-            </Text>
+          <View style={{ backgroundColor: "#0a0e17", borderRadius: 8, paddingHorizontal: 10, paddingVertical: 5, borderWidth: 1, borderColor: "#141c2b" }}>
+            <Text style={{ color: "#94a3b8", fontSize: 13, fontWeight: "600" }}>{currentPage + 1}<Text style={{ color: "#334155" }}> / {pages.length}</Text></Text>
           </View>
-
-          <TouchableOpacity
-            onPress={() => setSettingsVisible(true)}
-            style={{
-              padding: 6,
-              borderRadius: 8,
-              backgroundColor: "#0a0e17",
-              borderWidth: 1,
-              borderColor: settingsVisible ? "#38D926" : "#141c2b",
-            }}
-            hitSlop={{ top: 8, right: 8, bottom: 8, left: 8 }}
-          >
-            <MaterialCommunityIcons
-              name="cog-outline"
-              size={20}
-              color={settingsVisible ? "#38D926" : "#475569"}
-            />
+          <TouchableOpacity onPress={() => setSettingsVisible(true)} style={{ padding: 6, borderRadius: 8, backgroundColor: "#0a0e17", borderWidth: 1, borderColor: settingsVisible ? "#38D926" : "#141c2b" }}>
+            <MaterialCommunityIcons name="cog-outline" size={20} color={settingsVisible ? "#38D926" : "#475569"} />
           </TouchableOpacity>
         </View>
       </SafeAreaView>
 
-      {/* Page viewer */}
       <View style={{ flex: 1 }}>
-        <PageViewer
-          pages={pages}
-          initialPage={currentPage}
-          onPageChange={setCurrentPage}
-          mode={mode}
-          autoPlay={autoPlay}
-          autoPlaySpeed={autoPlaySpeed}
-        />
+        <PageViewer pages={pages} initialPage={currentPage} onPageChange={setCurrentPage} mode={mode} autoPlay={autoPlay} autoPlaySpeed={autoPlaySpeed} />
       </View>
 
       <SettingsModal
         visible={settingsVisible}
         onClose={() => setSettingsVisible(false)}
         mode={mode}
-        onModeChange={(m) => {
-          setMode(m);
-          if (m !== "autoplay") setAutoPlay(false);
-        }}
+        onModeChange={(m) => { setMode(m); if (m !== "autoplay") setAutoPlay(false); }}
         autoPlay={autoPlay}
         onAutoPlay={setAutoPlay}
         autoPlaySpeed={autoPlaySpeed}
         onSpeedChange={setAutoPlaySpeed}
         currentPage={currentPage}
         totalPages={pages.length}
-        onJumpToPage={(p) =>
-          setCurrentPage(Math.min(Math.max(0, p), pages.length - 1))
-        }
+        onJumpToPage={(p) => setCurrentPage(Math.min(Math.max(0, p), pages.length - 1))}
       />
-
-      <HiddenMangaModal
-        visible={hideVisible}
-        onClose={() => setHideVisible(false)}
-      />
+      <HiddenMangaModal visible={hideVisible} onClose={() => setHideVisible(false)} />
     </View>
   );
 }

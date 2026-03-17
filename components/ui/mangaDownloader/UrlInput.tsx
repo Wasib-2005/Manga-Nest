@@ -14,7 +14,7 @@ export const UrlInput = ({ value, onChange, onSubmit, onCancel, loading }: Props
     <TextInput
       value={value}
       onChangeText={onChange}
-      placeholder="nhentai.net/g/...  mangadex.org/chapter/...  or direct image URL"
+      placeholder="mangadex.org/chapter/...  or direct image URL"
       placeholderTextColor="#aaa"
       autoCapitalize="none"
       autoCorrect={false}
