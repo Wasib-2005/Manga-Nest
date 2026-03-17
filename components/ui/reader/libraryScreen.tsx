@@ -111,7 +111,7 @@ const MangaCard = React.memo(function MangaCard(
           justifyContent: "space-between", gap: 6 }}>
           <Text style={{ color: "#f1f5f9", fontWeight: "700", fontSize: 14,
             flex: 1, lineHeight: 20 }} numberOfLines={2}>
-            {item.name}
+            {item.name} 
           </Text>
           <View style={{ backgroundColor: srcColor + "20", borderRadius: 6,
             paddingHorizontal: 6, paddingVertical: 2,

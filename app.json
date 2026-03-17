@@ -23,7 +23,8 @@
       "permissions": [
         "READ_EXTERNAL_STORAGE",
         "WRITE_EXTERNAL_STORAGE"
-  ]
+      ],
+      "package": "com.MangaNest.waslla"
     },
     "web": {
       "bundler": "metro",
@@ -48,6 +49,12 @@
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "af39d58c-c9d5-4c32-ac2e-faf371a07c79"
+      }
     }
   }
 }
