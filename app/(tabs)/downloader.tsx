@@ -130,9 +130,11 @@ export default function Downloader() {
         contentContainerStyle={{ padding: 20, paddingTop: 60 }}
       >
         <View className="mb-8">
-          <Text className="text-2xl font-black text-[#f1f5f9] tracking-tight">
-            <Text className="text-[#38D926]">Manga </Text>Nest
+          <Text className="text-3xl font-black text-[#f1f5f9] tracking-tight">
+            <Text>Manga </Text>
+            <Text className="text-[#38D926]">Nest</Text>
           </Text>
+          <Text className="font-normal text-[11px] text-white mt-[-1rem] ml-[10.3rem]">-Downloader</Text>
         </View>
 
         {/* Form hides when downloading starts */}
