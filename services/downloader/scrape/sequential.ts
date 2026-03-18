@@ -5,12 +5,11 @@ const EXTENSIONS = [".webp", ".jpg", ".jpeg", ".png", ".gif"];
 export const SEQUENTIAL_PATTERN = /(.*\/)(\d+)\.(webp|jpg|jpeg|png|gif)(\?.*)?$/i;
 
 /**
- * Does NOT scan — just validates the URL and returns a placeholder.
- * The actual HEAD-request scan happens inside downloadManga so the
- * modal opens instantly and the user fills metadata while scanning runs.
+ * Validates the URL and returns a placeholder.
  */
 export const scrapeSequential = (imageUrl: string): MangaMeta => {
-  if (!SEQUENTIAL_PATTERN.test(imageUrl)) {
+  const match = imageUrl.match(SEQUENTIAL_PATTERN);
+  if (!match) {
     throw new Error(
       "Invalid sequential URL — must contain a number before the extension, e.g. .../05.jpg"
     );
@@ -22,15 +21,15 @@ export const scrapeSequential = (imageUrl: string): MangaMeta => {
     genres:    [],
     ep:        "",
     source:    "sequential",
-    imageUrls: [],       // filled during download
-    scanUrl:   imageUrl, // stored so downloadManga can scan
+    imageUrls: [],       
+    scanUrl:   imageUrl, 
   };
 };
 
-// ─── Scanner (called by downloadManga) ───────────────────────────────────────
+// ─── Scanner Helpers ─────────────────────────────────────────────────────────
 
 const MAX_HEAD_RETRIES   = 2;
-const CONSECUTIVE_MISSES = 2;
+const CONSECUTIVE_MISSES = 2; 
 const HEAD_TIMEOUT_MS    = 6000;
 
 const tryIndex = async (
@@ -39,67 +38,41 @@ const tryIndex = async (
   extensions: string[],
   onLog:      (msg: string) => void
 ): Promise<{ url: string; ext: string } | null> => {
-  onLog(`Trying index ${index}  →  ${base}${index}`);
-
+  const strIndex = index.toString();
+  
   const check = async (ext: string): Promise<{ url: string; ext: string } | null> => {
-    const url = `${base}${index}${ext}`;
+    const url = `${base}${strIndex}${ext}`;
     for (let attempt = 1; attempt <= MAX_HEAD_RETRIES; attempt++) {
       try {
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), HEAD_TIMEOUT_MS);
         const res = await fetch(url, { method: "HEAD", signal: controller.signal });
         clearTimeout(timer);
+        
         if (res.ok) return { url, ext };
-        onLog(`  ✗ ${url} (${res.status})`);
-        return null;
+        return null; 
       } catch {
-        if (attempt === MAX_HEAD_RETRIES) {
-          onLog(`  ✗ ${url} (network error)`);
-          return null;
-        }
+        if (attempt === MAX_HEAD_RETRIES) return null;
       }
     }
     return null;
   };
 
-  const results = await Promise.all(extensions.map(ext => check(ext)));
-  const found   = results.find(r => r !== null) ?? null;
-  if (found) onLog(`  ✓ found: ${found.url}`);
-  return found;
-};
-
-const scanDirection = async (
-  base:       string,
-  start:      number,
-  direction:  1 | -1,
-  extensions: string[],
-  onLog:      (msg: string) => void,
-  cancelRef:  { cancelled: boolean }
-): Promise<string[]> => {
-  const found: string[] = [];
-  let i      = start;
-  let misses = 0;
-
-  while (true) {
-    if (cancelRef.cancelled) throw new Error("CANCELLED");
-    if (i <= 0 && direction === -1) break;
-
-    const result = await tryIndex(base, i, extensions, onLog);
-    if (result) {
-      misses = 0;
-      found.push(result.url);
-    } else {
-      misses++;
-      if (misses >= CONSECUTIVE_MISSES) break;
+  for (const ext of extensions) {
+    const found = await check(ext);
+    if (found) {
+      onLog(`  ✓ Found ${index}: ${found.url}`);
+      return found;
     }
-    i += direction;
   }
-  return found;
+  
+  onLog(`  ✗ No image at ${index}`);
+  return null;
 };
 
 /**
- * Full sequential scan — called from downloadManga before page downloads begin.
- * Returns the ordered list of image URLs.
+ * Start-Forward Scan:
+ * Starts exactly at the index provided in the URL and goes UP.
  */
 export const runSequentialScan = async (
   imageUrl:  string,
@@ -110,20 +83,47 @@ export const runSequentialScan = async (
   if (!match) throw new Error("Invalid sequential image URL");
 
   const base      = match[1];
-  const startIdx  = parseInt(match[2], 10);
+  const startIndex = parseInt(match[2], 10); // Extract 10 from .../10.jpg
   const inputExt  = match[3].toLowerCase();
-  const ordered   = [inputExt, ...EXTENSIONS.filter(e => e !== inputExt)];
+  const orderedExts = [inputExt, ...EXTENSIONS.filter(e => e !== inputExt)];
 
-  onLog(`Base: ${base}  |  Start: ${startIdx}  |  Ext: ${inputExt}`);
-  onLog("── Scanning backward ──");
-  const backward = await scanDirection(base, startIdx,     -1, ordered, onLog, cancelRef);
+  onLog(`Starting Scan from index: ${startIndex}`);
+  
+  const urls: string[] = [];
+  let currentIndex = startIndex;
+  let misses = 0;
 
-  onLog("── Scanning forward ──");
-  const forward  = await scanDirection(base, startIdx + 1,  1, ordered, onLog, cancelRef);
+  while (true) {
+    if (cancelRef.cancelled) throw new Error("CANCELLED");
 
-  const urls = [...backward.reverse(), ...forward];
-  onLog(`✓ Found ${urls.length} images`);
+    const result = await tryIndex(base, currentIndex, orderedExts, onLog);
+    
+    if (result) {
+      urls.push(result.url);
+      misses = 0; 
+    } else {
+      misses++;
+      // Stop if we hit 404s for 2 numbers in a row
+      if (misses >= CONSECUTIVE_MISSES) {
+        onLog(`Scan complete. End of sequence reached at ${currentIndex}.`);
+        break;
+      }
+    }
 
-  if (urls.length === 0) throw new Error("No images found — check the URL");
+    currentIndex++;
+
+    // Safety limit
+    if (currentIndex > startIndex + 1000) {
+      onLog("Reached safety limit (1000 pages from start). Stopping.");
+      break;
+    }
+  }
+
+  onLog(`✓ Found ${urls.length} images starting from ${startIndex}`);
+  
+  if (urls.length === 0) {
+    throw new Error(`Failed to find even the first image at index ${startIndex}`);
+  }
+
   return urls;
 };

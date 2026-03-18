@@ -9,27 +9,29 @@ import {
   ScrollView,
   ActivityIndicator,
   Alert,
+  Dimensions,
+  RefreshControl,
 } from "react-native";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import {
   readMangaLibrary,
   searchByTitle,
-  filterByGenre,
   getFirstPageUri,
   type MangaEntry,
 } from "../../../services/reader/libraryService";
 import { getHiddenMangaList } from "../../../services/reader/readingProgressService";
 import { ChapterPickerModal } from "./chapterPickerModal";
 
-// ─── Sort & Types ──────────────────────────────────────────────────────────
+const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get("window");
 
-type SortKey = "newest" | "oldest" | "az" | "za" | "most-pages" | "least-pages";
+type SortKey = "newest" | "oldest" | "az" | "za" | "most-eps" | "least-eps" | "source";
+type LayoutMode = "hero" | "list" | "grid" | "compact";
 
 const SORT_OPTIONS: { key: SortKey; label: string; icon: string }[] = [
   { key: "newest", label: "Newest", icon: "clock-outline" },
-  { key: "oldest", label: "Oldest", icon: "history" },
   { key: "az", label: "A → Z", icon: "sort-alphabetical-ascending" },
-  { key: "za", label: "Z → A", icon: "sort-alphabetical-descending" },
+  { key: "most-eps", label: "Most Eps", icon: "library-shelves" },
+  { key: "source", label: "Source", icon: "database-outline" },
 ];
 
 const SRC_LABEL: Record<string, string> = { nhentai: "nH", mangadex: "MD", sequential: "SQ" };
@@ -42,206 +44,242 @@ function sortManga(list: MangaEntry[], key: SortKey): MangaEntry[] {
     case "za": return copy.sort((a, b) => b.name.localeCompare(a.name));
     case "newest": return copy.sort((a, b) => +new Date(b.addedAt) - +new Date(a.addedAt));
     case "oldest": return copy.sort((a, b) => +new Date(a.addedAt) - +new Date(b.addedAt));
+    case "most-eps": return copy.sort((a, b) => b.chapters.length - a.chapters.length);
+    case "least-eps": return copy.sort((a, b) => a.chapters.length - b.chapters.length);
+    case "source": return copy.sort((a, b) => a.source.localeCompare(b.source));
     default: return copy;
   }
 }
 
 // ─── Sub-Components ─────────────────────────────────────────────────────────
 
-const CoverImage = React.memo(function CoverImage({ uid, firstEp }: { uid: string; firstEp: string }) {
+const AutoHeightImage = React.memo(({ uri }: { uri: string }) => {
+  const [aspectRatio, setAspectRatio] = useState(3 / 4);
+  useEffect(() => {
+    Image.getSize(`file://${uri}`, (w, h) => { if (w && h) setAspectRatio(w / h); }, () => {});
+  }, [uri]);
+
+  return (
+    <Image
+      source={{ uri: `file://${uri}` }}
+      style={{ width: "100%", aspectRatio, maxHeight: SCREEN_HEIGHT * 0.6, borderRadius: 12, backgroundColor: "#0f172a" }}
+      resizeMode="cover"
+    />
+  );
+});
+AutoHeightImage.displayName = "AutoHeightImage";
+
+const CoverImage = React.memo(({ uid, firstEp, autoHeight }: { uid: string; firstEp: string; autoHeight?: boolean }) => {
   const [uri, setUri] = useState<string | null>(null);
   useEffect(() => { getFirstPageUri(uid, firstEp).then(setUri); }, [uid, firstEp]);
 
-  return (
-    <View style={{ width: 72, height: 100, borderRadius: 8, overflow: "hidden", backgroundColor: "#0f172a" }}>
-      {uri ? (
-        <Image source={{ uri: `file://${uri}` }} style={{ width: "100%", height: "100%" }} resizeMode="cover" />
-      ) : (
-        <View style={{ flex: 1, justifyContent: "center", alignItems: "center" }}>
-          <MaterialCommunityIcons name="image-outline" size={22} color="#334155" />
-        </View>
-      )}
+  if (!uri) return (
+    <View style={{ width: '100%', height: 120, borderRadius: 12, backgroundColor: "#0f172a", justifyContent: "center", alignItems: "center" }}>
+      <MaterialCommunityIcons name="image-off-outline" size={24} color="#1e293b" />
     </View>
+  );
+
+  return autoHeight ? <AutoHeightImage uri={uri} /> : (
+    <Image source={{ uri: `file://${uri}` }} style={{ width: "100%", height: "100%", borderRadius: 12 }} resizeMode="cover" />
   );
 });
 CoverImage.displayName = "CoverImage";
 
-const MangaCard = React.memo(function MangaCard({ item }: { item: MangaEntry }) {
+const AdaptiveCard = React.memo(({ item, mode }: { item: MangaEntry; mode: LayoutMode }) => {
   const firstEp = item.chapters[0]?.ep ?? "";
   const srcColor = SRC_COLOR[item.source] ?? "#64748b";
+  const dateStr = new Date(item.addedAt).toLocaleDateString();
 
-  return (
-    <View style={{ flexDirection: "row", gap: 12, backgroundColor: "#0a0e17", borderRadius: 12, padding: 12, marginBottom: 10, borderWidth: 1, borderColor: "#141c2b" }}>
-      {firstEp ? <CoverImage uid={item.uid} firstEp={firstEp} /> : (
-        <View style={{ width: 72, height: 100, borderRadius: 8, backgroundColor: "#0f172a", justifyContent: "center", alignItems: "center" }}>
-          <MaterialCommunityIcons name="book-outline" size={26} color="#334155" />
-        </View>
-      )}
-      <View style={{ flex: 1, justifyContent: "space-between" }}>
-        <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start" }}>
-          <Text style={{ color: "#f1f5f9", fontWeight: "700", fontSize: 14, flex: 1, marginRight: 8 }} numberOfLines={2}>{item.name}</Text>
-          <View style={{ backgroundColor: srcColor + "20", borderRadius: 6, paddingHorizontal: 6, paddingVertical: 2, borderWidth: 1, borderColor: srcColor + "44" }}>
-            <Text style={{ color: srcColor, fontSize: 10, fontWeight: "700" }}>{SRC_LABEL[item.source] || "?"}</Text>
+  if (mode === "hero") {
+    return (
+      <View style={{ marginBottom: 32, paddingHorizontal: 16 }}>
+        <CoverImage uid={item.uid} firstEp={firstEp} autoHeight />
+        <View style={{ marginTop: 14 }}>
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+            <Text style={{ color: srcColor, fontWeight: "900", fontSize: 12 }}>{item.source.toUpperCase()}</Text>
+            <Text style={{ color: "#475569", fontSize: 11 }}>{dateStr}</Text>
+          </View>
+          <Text style={{ color: "#f1f5f9", fontWeight: "900", fontSize: 22, marginTop: 4 }}>{item.name}</Text>
+          {item.author ? <Text style={{ color: "#38D926", fontSize: 14, marginTop: 2 }}>by {item.author}</Text> : null}
+          
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 10 }}>
+            {item.tags.slice(0, 5).map((t, i) => (
+              <View key={i} style={{ backgroundColor: "#1e293b", paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6 }}>
+                <Text style={{ color: "#94a3b8", fontSize: 10 }}>#{t}</Text>
+              </View>
+            ))}
+          </View>
+
+          <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 12, backgroundColor: "#0a0e17", padding: 10, borderRadius: 8, borderWidth: 1, borderColor: "#1e293b" }}>
+            <MaterialCommunityIcons name="library-shelves" size={18} color="#38D926" />
+            <Text style={{ color: "#f1f5f9", marginLeft: 8, fontWeight: "600" }}>{item.chapters.length} Chapters stored locally</Text>
           </View>
         </View>
-        <View style={{ flexDirection: "row", gap: 10 }}>
-          <Text style={{ color: "#64748b", fontSize: 11 }}>Eps: {item.chapters.length}</Text>
-          <Text style={{ color: "#475569", fontSize: 11 }}>•</Text>
-          <Text style={{ color: "#64748b", fontSize: 11 }}>{new Date(item.addedAt).toLocaleDateString()}</Text>
-        </View>
-      </View>
-    </View>
-  );
-});
-MangaCard.displayName = "MangaCard";
-
-const Chip = React.memo(function Chip({ label, active, onPress, color }: any) {
-  const c = color ?? "#38D926";
-  return (
-    <TouchableOpacity onPress={onPress} style={{
-      paddingHorizontal: 11, paddingVertical: 5, borderRadius: 20, marginRight: 6,
-      backgroundColor: active ? c + "20" : "#0a0e17",
-      borderWidth: 1, borderColor: active ? c : "#141c2b",
-    }}>
-      <Text style={{ color: active ? c : "#475569", fontSize: 12, fontWeight: "600" }}>{label}</Text>
-    </TouchableOpacity>
-  );
-});
-Chip.displayName = "Chip";
-
-// ─── Main Component ─────────────────────────────────────────────────────────
-
-interface Props {
-  onSelectManga: (manga: MangaEntry, chapter: string) => void;
-  onDeleteChapter: (uid: string, ep: string) => void;
-  onDeleteManga: (uid: string) => void;
-  hideMode: boolean;
-}
-
-export const LibraryScreen = ({ onSelectManga, onDeleteChapter, onDeleteManga, hideMode }: Props) => {
-  const [manga, setManga] = useState<MangaEntry[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [search, setSearch] = useState("");
-  const [sortKey, setSortKey] = useState<SortKey>("newest");
-  const [hiddenList, setHiddenList] = useState<string[]>([]);
-  const [pickerManga, setPickerManga] = useState<MangaEntry | null>(null);
-  const [pickerOpen, setPickerOpen] = useState(false);
-
-  useEffect(() => {
-    (async () => {
-      setLoading(true);
-      const [library, hidden] = await Promise.all([readMangaLibrary(), getHiddenMangaList()]);
-      setHiddenList(hidden);
-      setManga(library);
-      setLoading(false);
-    })();
-  }, []);
-
-  const handleLongPress = (item: MangaEntry) => {
-    Alert.alert(
-      "Delete Manga",
-      `Are you sure you want to delete "${item.name}"? This will remove all downloaded chapters.`,
-      [
-        { text: "Cancel", style: "cancel" },
-        { text: "Delete", style: "destructive", onPress: () => onDeleteManga(item.uid) },
-      ]
-    );
-  };
-
-  const filtered = useMemo(() => {
-    let result = hideMode ? manga.filter(m => hiddenList.includes(m.uid)) : manga.filter(m => !hiddenList.includes(m.uid));
-    result = searchByTitle(result, search);
-    return sortManga(result, sortKey);
-  }, [manga, search, sortKey, hiddenList, hideMode]);
-
-  if (loading) {
-    return (
-      <View style={{ flex: 1, backgroundColor: "#030712", justifyContent: "center", alignItems: "center" }}>
-        <ActivityIndicator size="large" color="#38D926" />
       </View>
     );
   }
 
+  if (mode === "list") {
+    return (
+      <View style={{ flexDirection: "row", gap: 14, backgroundColor: "#0a0e17", borderRadius: 16, padding: 12, marginBottom: 12, marginHorizontal: 16, borderWidth: 1, borderColor: "#141c2b" }}>
+        <View style={{ width: 80, height: 110 }}><CoverImage uid={item.uid} firstEp={firstEp} /></View>
+        <View style={{ flex: 1, justifyContent: "space-between" }}>
+          <View>
+            <Text style={{ color: srcColor, fontSize: 10, fontWeight: "900" }}>{SRC_LABEL[item.source]}</Text>
+            <Text style={{ color: "#f1f5f9", fontWeight: "700", fontSize: 15 }} numberOfLines={2}>{item.name}</Text>
+            <Text style={{ color: "#475569", fontSize: 11, marginTop: 2 }} numberOfLines={1}>{item.author}</Text>
+          </View>
+          <Text style={{ color: "#38D926", fontSize: 12, fontWeight: "800" }}>{item.chapters.length} Eps</Text>
+        </View>
+      </View>
+    );
+  }
+
+  const isCompact = mode === "compact";
+  return (
+    <View style={{ marginBottom: 20 }}>
+      <CoverImage uid={item.uid} firstEp={firstEp} autoHeight />
+      <View style={{ marginTop: 8, paddingHorizontal: 4 }}>
+        <Text style={{ color: srcColor, fontSize: 9, fontWeight: "900" }}>{SRC_LABEL[item.source]}</Text>
+        <Text style={{ color: "#f1f5f9", fontWeight: "600", fontSize: isCompact ? 11 : 13 }} numberOfLines={2}>{item.name}</Text>
+        <Text style={{ color: "#38D926", fontSize: 10, fontWeight: "700", marginTop: 2 }}>{item.chapters.length} Eps</Text>
+      </View>
+    </View>
+  );
+});
+AdaptiveCard.displayName = "AdaptiveCard";
+
+// ─── Main Screen ────────────────────────────────────────────────────────────
+
+export const LibraryScreen = ({ onSelectManga, onDeleteChapter, onDeleteManga, hideMode }: any) => {
+  const [manga, setManga] = useState<MangaEntry[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [search, setSearch] = useState("");
+  const [sortKey, setSortKey] = useState<SortKey>("newest");
+  const [layout, setLayout] = useState<LayoutMode>("hero");
+  const [hiddenList, setHiddenList] = useState<string[]>([]);
+  const [pickerManga, setPickerManga] = useState<MangaEntry | null>(null);
+
+  const loadData = async () => {
+    const [library, hidden] = await Promise.all([readMangaLibrary(), getHiddenMangaList()]);
+    setManga(library);
+    setHiddenList(hidden);
+  };
+
+  useEffect(() => {
+    loadData().then(() => setLoading(false));
+  }, []);
+
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    await loadData();
+    setRefreshing(false);
+  }, []);
+
+  const filtered = useMemo(() => {
+    let res = hideMode ? manga.filter(m => hiddenList.includes(m.uid)) : manga.filter(m => !hiddenList.includes(m.uid));
+    res = searchByTitle(res, search);
+    return sortManga(res, sortKey);
+  }, [manga, search, sortKey, hiddenList, hideMode]);
+
+  const numColumns = (layout === "grid") ? 2 : (layout === "compact" ? 3 : 1);
+
+  if (loading) return (
+    <View style={{ flex: 1, backgroundColor: "#030712", justifyContent: "center" }}>
+      <ActivityIndicator size="large" color="#38D926" />
+    </View>
+  );
+
   return (
     <View style={{ flex: 1, backgroundColor: "#030712" }}>
-      {/* Header Section */}
-      <View style={{ paddingHorizontal: 16, paddingTop: 52, paddingBottom: 10, borderBottomWidth: 1, borderBottomColor: "#0a0e17" }}>
-        <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-          <Text style={{ color: "#f1f5f9", fontSize: 22, fontWeight: "900" }}>
-            Manga <Text style={{ color: "#38D926" }}>Nest</Text>
-          </Text>
-          <Text style={{ color: "#334155", fontSize: 12 }}>{filtered.length} titles</Text>
+      <View style={{ paddingHorizontal: 16, paddingTop: 52, paddingBottom: 12 }}>
+        <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 18 }}>
+          <Text style={{ color: "#f1f5f9", fontSize: 26, fontWeight: "900" }}>Nest <Text style={{ color: "#38D926" }}>Library</Text></Text>
+          
+          <View style={{ flexDirection: "row", alignItems: 'center', gap: 8 }}>
+            {/* Refresh Button */}
+            <TouchableOpacity 
+              onPress={onRefresh}
+              disabled={refreshing}
+              style={{ padding: 8, backgroundColor: "#0a0e17", borderRadius: 10, borderWidth: 1, borderColor: "#1e293b" }}
+            >
+              {refreshing ? (
+                <ActivityIndicator size={18} color="#38D926" />
+              ) : (
+                <MaterialCommunityIcons name="refresh" size={20} color="#38D926" />
+              )}
+            </TouchableOpacity>
+
+            <View style={{ flexDirection: "row", backgroundColor: "#0a0e17", borderRadius: 10, padding: 3, borderWidth: 1, borderColor: "#1e293b" }}>
+              {(["hero", "list", "grid", "compact"] as LayoutMode[]).map(m => (
+                <TouchableOpacity key={m} onPress={() => setLayout(m)} style={{ 
+                  padding: 6, borderRadius: 8, backgroundColor: layout === m ? "#1e293b" : "transparent" 
+                }}>
+                  <MaterialCommunityIcons 
+                    name={m === "hero" ? "view-agenda" : m === "list" ? "view-list" : m === "grid" ? "view-grid" : "view-module"} 
+                    size={18} color={layout === m ? "#38D926" : "#475569"} 
+                  />
+                </TouchableOpacity>
+              ))}
+            </View>
+          </View>
         </View>
 
-        {/* Search Bar */}
-        <View style={{ flexDirection: "row", alignItems: "center", backgroundColor: "#0a0e17", borderRadius: 10, paddingHorizontal: 10, paddingVertical: 8, borderWidth: 1, borderColor: "#141c2b" }}>
-          <MaterialCommunityIcons name="magnify" size={18} color="#334155" />
-          <TextInput
-            value={search}
-            onChangeText={setSearch}
-            placeholder="Search your library..."
-            placeholderTextColor="#334155"
-            style={{ flex: 1, color: "#f1f5f9", marginLeft: 8, fontSize: 14 }}
-          />
-        </View>
+        <TextInput
+          value={search} onChangeText={setSearch} placeholder="Search titles, authors..." placeholderTextColor="#334155"
+          style={{ backgroundColor: "#0a0e17", borderRadius: 12, padding: 12, color: "#f1f5f9", borderWidth: 1, borderColor: "#141c2b" }}
+        />
 
-        {/* Sort Chips */}
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: 12 }}>
-          {SORT_OPTIONS.map((opt) => (
-            <Chip
-              key={opt.key}
-              label={opt.label}
-              active={sortKey === opt.key}
-              onPress={() => setSortKey(opt.key)}
-            />
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: 14 }}>
+          {SORT_OPTIONS.map(opt => (
+            <TouchableOpacity key={opt.key} onPress={() => setSortKey(opt.key)} style={{
+              flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 20, marginRight: 8,
+              backgroundColor: sortKey === opt.key ? "#38D92615" : "#0a0e17", borderWidth: 1, borderColor: sortKey === opt.key ? "#38D926" : "#141c2b",
+            }}>
+              <MaterialCommunityIcons name={opt.icon as any} size={14} color={sortKey === opt.key ? "#38D926" : "#475569"} style={{ marginRight: 6 }} />
+              <Text style={{ color: sortKey === opt.key ? "#38D926" : "#475569", fontSize: 12, fontWeight: "700" }}>{opt.label}</Text>
+            </TouchableOpacity>
           ))}
         </ScrollView>
       </View>
 
-      {/* Manga List */}
       <FlatList
+        key={layout}
         data={filtered}
-        keyExtractor={(item) => item.uid}
+        numColumns={numColumns}
+        keyExtractor={item => item.uid}
+        columnWrapperStyle={numColumns > 1 ? { justifyContent: "flex-start", gap: 12, paddingHorizontal: 16 } : null}
+        contentContainerStyle={{ paddingBottom: 100 }}
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#38D926" />
+        }
         renderItem={({ item }) => (
-          <TouchableOpacity
-            activeOpacity={0.7}
+          <TouchableOpacity 
+            style={{ width: numColumns === 1 ? '100%' : (SCREEN_WIDTH - (numColumns + 1) * 16) / numColumns }}
             onPress={() => {
               if (item.chapters.length === 1) onSelectManga(item, item.chapters[0].ep);
-              else { setPickerManga(item); setPickerOpen(true); }
+              else setPickerManga(item);
             }}
-            onLongPress={() => handleLongPress(item)}
+            onLongPress={() => Alert.alert("Options", item.name, [
+              { text: "Cancel", style: "cancel" },
+              { text: "Delete Library Entry", style: "destructive", onPress: () => onDeleteManga(item.uid) }
+            ])}
           >
-            <MangaCard item={item} />
+            <AdaptiveCard item={item} mode={layout} />
           </TouchableOpacity>
         )}
-        contentContainerStyle={{ padding: 16, paddingBottom: 100 }}
-        ListEmptyComponent={
-          <View style={{ flex: 1, alignItems: "center", marginTop: 100 }}>
-            <MaterialCommunityIcons name="bookshelf" size={48} color="#1e293b" />
-            <Text style={{ color: "#475569", marginTop: 10 }}>Your library is empty</Text>
-          </View>
-        }
       />
 
-      {/* Modals */}
       {pickerManga && (
         <ChapterPickerModal
-          visible={pickerOpen}
+          visible={!!pickerManga}
           chapters={pickerManga.chapters}
           mangaName={pickerManga.name}
           mangaUid={pickerManga.uid}
-          onSelectChapter={(ep) => { onSelectManga(pickerManga, ep); setPickerOpen(false); }}
-          onDeleteChapter={(ep) => {
-            onDeleteChapter(pickerManga.uid, ep);
-            const remaining = pickerManga.chapters.filter((c) => c.ep !== ep);
-            if (remaining.length === 0) {
-              setPickerOpen(false);
-              setPickerManga(null);
-            } else {
-              setPickerManga({ ...pickerManga, chapters: remaining });
-            }
-          }}
-          onClose={() => { setPickerOpen(false); setPickerManga(null); }}
+          onSelectChapter={(ep) => { onSelectManga(pickerManga, ep); setPickerManga(null); }}
+          onDeleteChapter={(ep) => onDeleteChapter(pickerManga.uid, ep)}
+          onClose={() => setPickerManga(null)}
         />
       )}
     </View>

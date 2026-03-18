@@ -14,31 +14,34 @@ export const UrlInput = ({ value, onChange, onSubmit, onCancel, loading }: Props
     <TextInput
       value={value}
       onChangeText={onChange}
-      placeholder="mangadex.org/chapter/...  or direct image URL"
-      placeholderTextColor="#aaa"
+      placeholder="Manga link or chapter URL..."
+      placeholderTextColor="#475569"
       autoCapitalize="none"
       autoCorrect={false}
       onSubmitEditing={onSubmit}
       returnKeyType="search"
       editable={!loading}
-      className="flex-1 bg-white border border-gray-200 rounded-xl px-4 py-3 text-sm text-black"
+      className="flex-1 bg-[#0a0e17] border border-[#1e293b] rounded-xl px-4 py-3 text-sm text-[#f1f5f9]"
     />
+    
     {loading ? (
       <TouchableOpacity
         onPress={onCancel}
-        className="bg-red-400 rounded-xl px-4 justify-center items-center"
-        style={{ minWidth: 80 }}
+        activeOpacity={0.7}
+        className="bg-red-500/10 border border-red-500 rounded-xl px-4 justify-center items-center"
+        style={{ minWidth: 90 }}
       >
-        <ActivityIndicator color="#fff" size="small" style={{ marginBottom: 2 }} />
-        <Text className="text-white text-xs font-bold">Cancel</Text>
+        <ActivityIndicator color="#ef4444" size="small" />
+        <Text className="text-red-500 text-[10px] font-black uppercase mt-1">Cancel</Text>
       </TouchableOpacity>
     ) : (
       <TouchableOpacity
         onPress={onSubmit}
+        activeOpacity={0.8}
         className="bg-[#38D926] rounded-xl px-4 justify-center items-center"
-        style={{ minWidth: 80 }}
+        style={{ minWidth: 90 }}
       >
-        <Text className="text-white font-bold">Look up</Text>
+        <Text className="text-[#030712] font-black uppercase text-xs">Look up</Text>
       </TouchableOpacity>
     )}
   </View>
