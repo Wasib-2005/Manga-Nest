@@ -19,14 +19,14 @@ import { SettingsModal } from "../../components/ui/reader/settingsModal";
 import { HiddenMangaModal } from "../../components/ui/reader/hiddenMangaModal";
 import {
   getChapterPages,
+  renameChapterEp,
   type MangaEntry,
 } from "../../services/reader/libraryService";
 import {
   getReadingProgress,
   saveReadingProgress,
 } from "../../services/reader/readingProgressService";
-// Combined delete services
-import { deleteChapterFiles, deleteFullManga } from "../../services/reader/deleteManga"; 
+import { deleteChapterFiles, deleteFullManga } from "../../services/reader/deleteManga";
 
 type Screen = "library" | "reader";
 
@@ -42,7 +42,7 @@ export default function ReaderScreen() {
   const [settingsVisible, setSettingsVisible] = useState(false);
   const [hideVisible, setHideVisible] = useState(false);
   const [nestTaps, setNestTaps] = useState(0);
-  const [refreshKey, setRefreshKey] = useState(0); 
+  const [refreshKey, setRefreshKey] = useState(0);
 
   const handleNestTap = () => {
     const next = nestTaps + 1;
@@ -75,10 +75,9 @@ export default function ReaderScreen() {
     try {
       const wasFullMangaDeleted = await deleteChapterFiles(uid, ep);
       if (wasFullMangaDeleted) {
-        // If the last chapter was deleted, we return to library
         if (selectedManga?.uid === uid) {
-            setScreen("library");
-            setSelectedManga(null);
+          setScreen("library");
+          setSelectedManga(null);
         }
       }
       setRefreshKey(prev => prev + 1);
@@ -94,10 +93,23 @@ export default function ReaderScreen() {
         setScreen("library");
         setSelectedManga(null);
       }
-      // Force library reload
       setRefreshKey(prev => prev + 1);
     } catch (err) {
       Alert.alert("Error", "Failed to delete manga from library");
+    }
+  };
+
+  // ✅ FIX: Handler was missing entirely — this is why rename silently failed
+  const onRenameChapter = async (uid: string, oldEp: string, newEp: string) => {
+    try {
+      await renameChapterEp(uid, oldEp, newEp);
+      // If the currently open chapter was renamed, keep the header in sync
+      if (selectedManga?.uid === uid && selectedChapter === oldEp) {
+        setSelectedChapter(newEp);
+      }
+      setRefreshKey(prev => prev + 1);
+    } catch (err) {
+      Alert.alert("Error", "Failed to rename chapter");
     }
   };
 
@@ -116,7 +128,7 @@ export default function ReaderScreen() {
     setPages([]);
     setNestTaps(0);
     setAutoPlay(false);
-    setRefreshKey(prev => prev + 1); 
+    setRefreshKey(prev => prev + 1);
   };
 
   useEffect(() => {
@@ -137,12 +149,13 @@ export default function ReaderScreen() {
     return (
       <View style={{ flex: 1 }}>
         <StatusBar barStyle="light-content" backgroundColor="#030712" />
-        <LibraryScreen 
-          key={refreshKey} 
-          onSelectManga={handleSelectManga} 
+        <LibraryScreen
+          key={refreshKey}
+          onSelectManga={handleSelectManga}
           onDeleteChapter={onDeleteChapter}
-          onDeleteManga={onDeleteManga} // Fixes the TS error
-          hideMode={false} 
+          onDeleteManga={onDeleteManga}
+          onRenameChapter={onRenameChapter} // ✅ FIX: now passed down
+          hideMode={false}
         />
         <TouchableOpacity
           activeOpacity={1}
@@ -164,19 +177,36 @@ export default function ReaderScreen() {
           </TouchableOpacity>
           <View style={{ flex: 1 }}>
             <Text style={{ color: "#f1f5f9", fontWeight: "700", fontSize: 14 }} numberOfLines={1}>{selectedManga?.name}</Text>
-            {selectedChapter && <Text style={{ color: "#38D926", fontSize: 11 }} numberOfLines={1}>Chapter: {selectedChapter}</Text>}
+            {selectedChapter && (
+              <Text style={{ color: "#38D926", fontSize: 11 }} numberOfLines={1}>
+                Chapter: {selectedChapter}
+              </Text>
+            )}
           </View>
           <View style={{ backgroundColor: "#0a0e17", borderRadius: 8, paddingHorizontal: 10, paddingVertical: 5, borderWidth: 1, borderColor: "#141c2b" }}>
-            <Text style={{ color: "#94a3b8", fontSize: 13, fontWeight: "600" }}>{currentPage + 1}<Text style={{ color: "#334155" }}> / {pages.length}</Text></Text>
+            <Text style={{ color: "#94a3b8", fontSize: 13, fontWeight: "600" }}>
+              {currentPage + 1}
+              <Text style={{ color: "#334155" }}> / {pages.length}</Text>
+            </Text>
           </View>
-          <TouchableOpacity onPress={() => setSettingsVisible(true)} style={{ padding: 6, borderRadius: 8, backgroundColor: "#0a0e17", borderWidth: 1, borderColor: settingsVisible ? "#38D926" : "#141c2b" }}>
+          <TouchableOpacity
+            onPress={() => setSettingsVisible(true)}
+            style={{ padding: 6, borderRadius: 8, backgroundColor: "#0a0e17", borderWidth: 1, borderColor: settingsVisible ? "#38D926" : "#141c2b" }}
+          >
             <MaterialCommunityIcons name="cog-outline" size={20} color={settingsVisible ? "#38D926" : "#475569"} />
           </TouchableOpacity>
         </View>
       </SafeAreaView>
 
       <View style={{ flex: 1 }}>
-        <PageViewer pages={pages} initialPage={currentPage} onPageChange={setCurrentPage} mode={mode} autoPlay={autoPlay} autoPlaySpeed={autoPlaySpeed} />
+        <PageViewer
+          pages={pages}
+          initialPage={currentPage}
+          onPageChange={setCurrentPage}
+          mode={mode}
+          autoPlay={autoPlay}
+          autoPlaySpeed={autoPlaySpeed}
+        />
       </View>
 
       <SettingsModal

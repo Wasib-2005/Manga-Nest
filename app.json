@@ -25,7 +25,8 @@
         "READ_EXTERNAL_STORAGE",
         "WRITE_EXTERNAL_STORAGE"
       ],
-      "package": "com.MangaNest.waslla"
+      "package": "com.MangaNest.waslla",
+      "versionCode": 2
     },
     "web": {
       "bundler": "metro",

@@ -5,8 +5,6 @@ import { runSequentialScan } from "./scrape/sequential";
 
 const MAX_RETRY = 3;
 
-const IS_PRODUCTION = process.env.PRODUCTION === "1";
-
 const HEADERS: Record<MangaMeta["source"], Record<string, string>> = {
   mangadex:   { "User-Agent": "Mozilla/5.0", "Referer": "https://mangadex.org/" },
   nhentai:    { "User-Agent": "Mozilla/5.0", "Referer": "https://nhentai.net/"  },
@@ -121,7 +119,7 @@ export const downloadManga = async (
   edited:     EditedMeta,
   onProgress: (p: DownloadProgress) => void,
   cancelRef:  { cancelled: boolean },
-  onLog?:     (msg: string) => void    // used by sequential scan
+  onLog?:     (msg: string) => void    
 ): Promise<string> => {
 
   const log = (msg: string) => {
@@ -132,9 +130,7 @@ export const downloadManga = async (
   const canonicalName = edited.name.trim();
   const ep            = edited.ep.trim();
 
-  // ── 1. Sequential scan (before anything else) ─────────────────────────────
-  // For sequential source, imageUrls is empty at this point.
-  // Run the scan now, while the user already has the modal open.
+  // ── 1. Sequential scan ────────────────────────────────────────────────────
   let resolvedMeta = meta;
   if (meta.source === "sequential") {
     if (!meta.scanUrl) throw new Error("Missing scan URL for sequential source");
@@ -172,7 +168,7 @@ export const downloadManga = async (
     return { uid: newUid, isNewTitle: true };
   });
 
-  // ── 4. Directory tree ─────────────────────────────────────────────────────
+  // ── 4. Directory tree & Title Metadata ─────────────────────────────────────
   const titleDir   = new Directory(root,     uid);
   const chapterDir = new Directory(titleDir, ep);
 
@@ -180,12 +176,20 @@ export const downloadManga = async (
   if (!chapterDir.exists) chapterDir.create({ intermediates: true });
 
   const titleFile = new File(`${titleDir.uri}/title.json`);
-  if (!titleFile.exists) {
-    await titleFile.write(JSON.stringify(
-      { uid, name: canonicalName, source: resolvedMeta.source, addedAt: new Date().toISOString() },
-      null, 2
-    ));
-  }
+  
+  // FIX: Save full metadata to title.json so LibraryScreen can find it
+  await titleFile.write(JSON.stringify(
+    { 
+      uid, 
+      name: canonicalName, 
+      author: edited.author.trim(),
+      tags: edited.tags.split(",").map(t => t.trim()).filter(Boolean),
+      genres: edited.genres.split(",").map(t => t.trim()).filter(Boolean),
+      source: resolvedMeta.source, 
+      addedAt: new Date().toISOString() 
+    },
+    null, 2
+  ));
 
   log(`📁 uid: ${uid}  («${canonicalName}»)`);
   log(`📁 path: ${chapterDir.uri}`);

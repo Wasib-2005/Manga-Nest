@@ -1,117 +1,205 @@
 import { Directory, File, Paths } from "expo-file-system";
 
-export interface MangaEntry {
-  uid:      string;
-  name:     string;
-  author:   string;
-  tags:     string[];
-  genres:   string[];
-  source:   "nhentai" | "mangadex" | "sequential";
-  addedAt:  string;
-  chapters: ChapterInfo[];
-}
-
 export interface ChapterInfo {
-  ep:      string;
-  pages:   number;
+  ep: string;
+  pages: number;
   savedAt: string;
 }
 
+export interface MangaEntry {
+  uid: string;
+  name: string;
+  author: string;
+  tags: string[];
+  genres: string[];
+  source: "nhentai" | "mangadex" | "sequential";
+  addedAt: string;
+  chapters: ChapterInfo[];
+}
+
+const getRoot = () => new Directory(Paths.document, "manga");
+
+/**
+ * Reads the library index and populates all manga metadata and chapters.
+ */
 export const readMangaLibrary = async (): Promise<MangaEntry[]> => {
-  const root = new Directory(Paths.document, "manga");
+  const root = getRoot();
   if (!root.exists) return [];
 
-  const entries: MangaEntry[] = [];
   try {
     const indexFile = new File(`${root.uri}/index.json`);
     if (!indexFile.exists) return [];
 
     const indexData = JSON.parse(await indexFile.text());
-    if (!Array.isArray(indexData)) return [];
+    const entries: MangaEntry[] = [];
 
     for (const indexEntry of indexData) {
-      try {
-        const mangaDir = new Directory(root, indexEntry.uid);
-        if (!mangaDir.exists) continue;
+      const mangaDir = new Directory(root, indexEntry.uid);
+      const titleFile = new File(`${mangaDir.uri}/title.json`);
+      if (!titleFile.exists) continue;
 
-        const titleFile = new File(`${mangaDir.uri}/title.json`);
-        if (!titleFile.exists) continue;
-        const titleData = JSON.parse(await titleFile.text());
+      const titleData = JSON.parse(await titleFile.text());
+      const chapters: ChapterInfo[] = [];
 
-        const chapters: ChapterInfo[] = [];
-        try {
-          for (const chapter of mangaDir.list()) {
-            if (!(chapter instanceof Directory)) continue;
-            const infoFile = new File(`${chapter.uri}/info.json`);
-            if (!infoFile.exists) continue;
-            try {
-              const info = JSON.parse(await infoFile.text());
-              chapters.push({ ep: info.ep, pages: info.pages, savedAt: info.savedAt });
-            } catch { /* skip */ }
-          }
-        } catch { /* no chapters yet */ }
+      // Loop through folders (chapters) inside the manga directory
+      for (const item of mangaDir.list()) {
+        if (!(item instanceof Directory)) continue;
+        const infoFile = new File(`${item.uri}/info.json`);
+        if (infoFile.exists) {
+          const info = JSON.parse(await infoFile.text());
+          chapters.push({
+            ep: info.ep,
+            pages: info.pages,
+            savedAt: info.savedAt,
+          });
+        }
+      }
 
-        // Sort chapters by savedAt ascending
-        chapters.sort((a, b) => new Date(a.savedAt).getTime() - new Date(b.savedAt).getTime());
+      // Sort chapters by date saved
+      chapters.sort(
+        (a, b) => new Date(a.savedAt).getTime() - new Date(b.savedAt).getTime(),
+      );
 
-        entries.push({
-          uid:     indexEntry.uid,
-          name:    titleData.name,
-          author:  titleData.author  || "",
-          tags:    titleData.tags    || [],
-          genres:  titleData.genres  || [],
-          source:  titleData.source,
-          addedAt: titleData.addedAt || new Date().toISOString(),
-          chapters,
+      entries.push({
+        uid: indexEntry.uid,
+        name: titleData.name,
+        author: titleData.author || "",
+        tags: titleData.tags || [],
+        genres: titleData.genres || [],
+        source: titleData.source,
+        addedAt: titleData.addedAt || new Date().toISOString(),
+        chapters,
+      });
+    }
+    return entries;
+  } catch (err) {
+    console.error("Library Read Error:", err);
+    return [];
+  }
+};
+
+/**
+ * MISSING FUNCTION FIXED: 
+ * Scans a chapter directory and returns sorted list of image URIs.
+ */
+export const getChapterPages = async (uid: string, ep: string): Promise<string[]> => {
+  try {
+    const root = getRoot();
+    const chapterDir = new Directory(new Directory(root, uid), ep);
+    
+    if (!chapterDir.exists) return [];
+
+    const files = chapterDir.list();
+    const pages: { num: number; uri: string }[] = [];
+
+    for (const file of files) {
+      if (file instanceof Directory) continue;
+      // Match files like "1.jpg", "02.webp", etc.
+      const match = file.name.match(/^(\d+)\.(webp|jpg|jpeg|png|gif)$/i);
+      if (match) {
+        pages.push({
+          num: parseInt(match[1], 10),
+          uri: file.uri,
         });
-      } catch (err) {
-        console.warn(`Failed to read manga ${indexEntry.uid}:`, err);
       }
     }
+
+    // CRITICAL: Sort numerically so page 10 isn't after page 1
+    return pages.sort((a, b) => a.num - b.num).map((p) => p.uri);
   } catch (err) {
-    console.warn("Failed to read manga library:", err);
+    console.error("Error getting chapter pages:", err);
+    return [];
   }
-
-  return entries;
 };
 
-export const getMangaByUid = async (uid: string): Promise<MangaEntry | null> => {
-  const library = await readMangaLibrary();
-  return library.find(m => m.uid === uid) || null;
+/** Updates metadata in title.json (Tags and Author) */
+export const updateMangaMetadata = async (
+  uid: string,
+  updates: Partial<MangaEntry>,
+) => {
+  const root = getRoot();
+  const mangaDir = new Directory(root, uid);
+  const titleFile = new File(`${mangaDir.uri}/title.json`);
+
+  if (titleFile.exists) {
+    const currentStr = await titleFile.text();
+    const current = JSON.parse(currentStr);
+
+    const updatedData = {
+      ...current,
+      ...updates,
+      updatedAt: new Date().toISOString(),
+    };
+
+    await titleFile.write(JSON.stringify(updatedData, null, 2));
+    return true;
+  }
+  return false;
 };
 
-export const getChapterPages = async (uid: string, ep: string): Promise<string[]> => {
-  const root       = new Directory(Paths.document, "manga");
-  const chapterDir = new Directory(new Directory(root, uid), ep);
-  if (!chapterDir.exists) return [];
+/** Renames a chapter folder and updates internal info.json */
+export const renameChapterEp = async (
+  uid: string,
+  oldEp: string,
+  newEp: string,
+) => {
+  const titleDir = new Directory(getRoot(), uid);
+  const oldDir = new Directory(titleDir, oldEp);
+  const newDir = new Directory(titleDir, newEp);
 
-  const pages: { num: number; path: string }[] = [];
-  try {
-    for (const file of chapterDir.list()) {
-      if (file instanceof Directory) continue;
-      const match = file.name.match(/^(\d+)\.(webp|jpg|jpeg|png|gif)$/);
-      if (!match) continue;
-      pages.push({ num: parseInt(match[1], 10), path: file.uri });
+  if (oldDir.exists && !newDir.exists) {
+    await oldDir.move(newDir);
+    const infoFile = new File(`${newDir.uri}/info.json`);
+    if (infoFile.exists) {
+      const info = JSON.parse(await infoFile.text());
+      info.ep = newEp;
+      await infoFile.write(JSON.stringify(info, null, 2));
     }
-  } catch (err) {
-    console.warn(`Failed to read pages for ${uid}/${ep}:`, err);
   }
-
-  pages.sort((a, b) => a.num - b.num);
-  return pages.map(p => p.path);
 };
 
-/** Returns the file URI of the first page of the first chapter, or null. */
-export const getFirstPageUri = async (uid: string, firstEp: string): Promise<string | null> => {
+export const deleteFullManga = async (uid: string) => {
+  const root = getRoot();
+  const titleDir = new Directory(root, uid);
+  const indexFile = new File(`${root.uri}/index.json`);
+
+  if (indexFile.exists) {
+    const entries = JSON.parse(await indexFile.text());
+    const updated = entries.filter((e: any) => e.uid !== uid);
+    await indexFile.write(JSON.stringify(updated, null, 2));
+  }
+  if (titleDir.exists) titleDir.delete();
+};
+
+export const deleteChapterFiles = async (
+  uid: string,
+  ep: string,
+): Promise<boolean> => {
+  const titleDir = new Directory(getRoot(), uid);
+  const chapterDir = new Directory(titleDir, ep);
+  if (chapterDir.exists) chapterDir.delete();
+
+  const remaining = titleDir.list().filter((item) => item instanceof Directory);
+  if (remaining.length === 0) {
+    await deleteFullManga(uid);
+    return true;
+  }
+  return false;
+};
+
+export const getFirstPageUri = async (
+  uid: string,
+  firstEp: string,
+): Promise<string | null> => {
   try {
-    const root  = new Directory(Paths.document, "manga");
-    const dir   = new Directory(new Directory(root, uid), firstEp);
+    const root = getRoot();
+    const dir = new Directory(new Directory(root, uid), firstEp);
     if (!dir.exists) return null;
 
     let best: { num: number; uri: string } | null = null;
     for (const file of dir.list()) {
       if (file instanceof Directory) continue;
-      const match = file.name.match(/^(\d+)\.(webp|jpg|jpeg|png|gif)$/);
+      const match = file.name.match(/^(\d+)\.(webp|jpg|jpeg|png|gif)$/i);
       if (!match) continue;
       const num = parseInt(match[1], 10);
       if (!best || num < best.num) best = { num, uri: file.uri };
@@ -122,11 +210,15 @@ export const getFirstPageUri = async (uid: string, firstEp: string): Promise<str
   }
 };
 
-export const filterByGenre = (entries: MangaEntry[], genre: string): MangaEntry[] =>
-  !genre ? entries : entries.filter(m => m.genres.some(g => g.toLowerCase().includes(genre.toLowerCase())));
-
-export const filterByAuthor = (entries: MangaEntry[], author: string): MangaEntry[] =>
-  !author ? entries : entries.filter(m => m.author.toLowerCase().includes(author.toLowerCase()));
-
-export const searchByTitle = (entries: MangaEntry[], query: string): MangaEntry[] =>
-  !query ? entries : entries.filter(m => m.name.toLowerCase().includes(query.toLowerCase()));
+/** Search helper used by the UI */
+export const searchByTitle = (
+  entries: MangaEntry[],
+  query: string,
+): MangaEntry[] =>
+  !query
+    ? entries
+    : entries.filter(
+        (m) =>
+          m.name.toLowerCase().includes(query.toLowerCase()) ||
+          (m.author && m.author.toLowerCase().includes(query.toLowerCase())),
+      );
