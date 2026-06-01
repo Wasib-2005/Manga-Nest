@@ -3,20 +3,27 @@ import {
   View,
   Image,
   FlatList,
+  ScrollView,
   ActivityIndicator,
   Dimensions,
   StatusBar,
   ViewToken,
   ListRenderItemInfo,
+  Text,
 } from "react-native";
 
-import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler';
-import Animated, { 
-  useSharedValue, 
-  useAnimatedStyle, 
-  withTiming, 
-  runOnJS 
-} from 'react-native-reanimated';
+import {
+  Gesture,
+  GestureDetector,
+  GestureHandlerRootView,
+} from "react-native-gesture-handler";
+import Animated, {
+  useSharedValue,
+  useAnimatedStyle,
+  withTiming,
+  runOnJS,
+  clamp,
+} from "react-native-reanimated";
 
 export type ViewMode = "horizontal" | "autoplay" | "vertical";
 
@@ -27,36 +34,44 @@ interface Props {
   mode: ViewMode;
   autoPlay: boolean;
   autoPlaySpeed: number;
+  onToggleUI?: () => void;
 }
 
 const { width: SW, height: SH } = Dimensions.get("window");
 
-// ─── Vertical Page Component ──────────────────────────────────────────
-const VerticalPage = React.memo(function VerticalPage({
-  uri,
-  onLayout,
-}: {
+// ─── Vertical scroll mode ─────────────────────────────────────────────────────
+// Uses a plain ScrollView — no FlatList, no getItemLayout headaches.
+// Each image sizes itself after Image.getSize resolves; a placeholder keeps
+// layout stable while loading.
+
+interface VerticalPageProps {
   uri: string;
-  onLayout: (h: number) => void;
-}) {
-  const [aspectRatio, setAspectRatio] = useState(1);
+}
+
+const VerticalPage = React.memo(function VerticalPage({ uri }: VerticalPageProps) {
+  // Start with a 4:3 guess so the list isn't zero-height before images resolve
+  const [imgHeight, setImgHeight] = useState(Math.round(SW * (4 / 3)));
 
   useEffect(() => {
-    Image.getSize(`file://${uri}`, (w, h) => {
-      if (w && h) {
-        const ratio = w / h;
-        setAspectRatio(ratio);
-        onLayout(SW / ratio);
-      }
-    }, () => {});
-  }, [uri, onLayout]);
+    let cancelled = false;
+    Image.getSize(
+      `file://${uri}`,
+      (w, h) => {
+        if (!cancelled && w > 0 && h > 0) {
+          setImgHeight(Math.round((SW * h) / w));
+        }
+      },
+      () => {} // silently keep the placeholder height on error
+    );
+    return () => { cancelled = true; };
+  }, [uri]);
 
   return (
     <Image
       source={{ uri: `file://${uri}` }}
       style={{
-        width: SW,
-        height: SW / aspectRatio,
+        width: SW,          // full width — no padding conflict
+        height: imgHeight,
         backgroundColor: "#000",
       }}
       resizeMode="contain"
@@ -64,26 +79,202 @@ const VerticalPage = React.memo(function VerticalPage({
   );
 });
 
-// ─── Zoomable Page Component ──────────────────────────────────────────
-const ZoomPage = React.memo(function ZoomPage({ 
-  uri, 
-  onZoomToggle,
-  onNext,
-  onPrev 
-}: { 
-  uri: string; 
-  onZoomToggle: (isZoomed: boolean) => void;
+// ─── Vertical viewer (ScrollView-based) ──────────────────────────────────────
+
+interface VerticalViewerProps {
+  pages: string[];
+  initialPage: number;
+  onPageChange: (page: number) => void;
+  onToggleUI: () => void;
+}
+
+const VerticalViewer = React.memo(function VerticalViewer({
+  pages,
+  initialPage,
+  onPageChange,
+  onToggleUI,
+}: VerticalViewerProps) {
+  const scrollRef = useRef<ScrollView>(null);
+  // Track cumulative offsets so we can report page changes
+  const offsetsRef = useRef<number[]>(Array(pages.length).fill(0));
+  const heightsRef = useRef<number[]>(Array(pages.length).fill(Math.round(SW * (4 / 3))));
+  const didJump = useRef(false);
+
+  // Once all heights are estimated, jump to initialPage
+  const jumpToPage = useCallback((page: number) => {
+    if (page <= 0) return;
+    const offset = heightsRef.current.slice(0, page).reduce((a, b) => a + b, 0);
+    scrollRef.current?.scrollTo({ y: offset, animated: false });
+  }, []);
+
+  useEffect(() => {
+    if (!didJump.current && initialPage > 0) {
+      // Wait a tick for the layout to be ready
+      const t = setTimeout(() => {
+        jumpToPage(initialPage);
+        didJump.current = true;
+      }, 150);
+      return () => clearTimeout(t);
+    }
+  }, [initialPage, jumpToPage]);
+
+  const handleScroll = useCallback(
+    (e: { nativeEvent: { contentOffset: { y: number } } }) => {
+      const y = e.nativeEvent.contentOffset.y;
+      // Find which page the top of the viewport is in
+      let cumulative = 0;
+      for (let i = 0; i < heightsRef.current.length; i++) {
+        cumulative += heightsRef.current[i];
+        if (y < cumulative) {
+          onPageChange(i);
+          return;
+        }
+      }
+      onPageChange(pages.length - 1);
+    },
+    [onPageChange, pages.length]
+  );
+
+  // Middle-tap toggle UI
+  const tap = Gesture.Tap()
+    .maxDuration(250)
+    .onEnd((e) => {
+      if (e.x > SW * 0.25 && e.x < SW * 0.75) {
+        runOnJS(onToggleUI)();
+      }
+    });
+
+  return (
+    <GestureDetector gesture={tap}>
+      <ScrollView
+        ref={scrollRef}
+        style={{ flex: 1, backgroundColor: "#000" }}
+        scrollEventThrottle={100}
+        onScroll={handleScroll}
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={{ alignItems: "center" }}
+      >
+        {pages.map((uri, i) => (
+          <VerticalPage
+            key={`${i}-${uri}`}
+            uri={uri}
+          />
+        ))}
+      </ScrollView>
+    </GestureDetector>
+  );
+});
+
+// ─── Zoomable horizontal page ─────────────────────────────────────────────────
+
+interface ZoomPageProps {
+  uri: string;
   onNext: () => void;
   onPrev: () => void;
-}) {
+  onToggleUI: () => void;
+}
+
+const ZoomPage = React.memo(function ZoomPage({
+  uri,
+  onNext,
+  onPrev,
+  onToggleUI,
+}: ZoomPageProps) {
   const scale = useSharedValue(1);
+  const savedScale = useSharedValue(1);
+  const focalX = useSharedValue(0);
+  const focalY = useSharedValue(0);
   const translateX = useSharedValue(0);
   const translateY = useSharedValue(0);
-  const savedScale = useSharedValue(1);
-  const savedTranslateX = useSharedValue(0);
-  const savedTranslateY = useSharedValue(0);
+  const savedTX = useSharedValue(0);
+  const savedTY = useSharedValue(0);
+  const isZoomed = useSharedValue(false);
 
-  const animatedStyle = useAnimatedStyle(() => ({
+  const resetZoom = () => {
+    "worklet";
+    scale.value = withTiming(1, { duration: 220 });
+    translateX.value = withTiming(0, { duration: 220 });
+    translateY.value = withTiming(0, { duration: 220 });
+    savedScale.value = 1;
+    savedTX.value = 0;
+    savedTY.value = 0;
+    isZoomed.value = false;
+  };
+
+  const pinch = Gesture.Pinch()
+    .onStart((e) => {
+      focalX.value = e.focalX;
+      focalY.value = e.focalY;
+    })
+    .onUpdate((e) => {
+      const next = clamp(savedScale.value * e.scale, 1, 6);
+      scale.value = next;
+      const delta = next / savedScale.value;
+      translateX.value = focalX.value - delta * (focalX.value - savedTX.value);
+      translateY.value = focalY.value - delta * (focalY.value - savedTY.value);
+    })
+    .onEnd(() => {
+      if (scale.value <= 1.05) {
+        resetZoom();
+      } else {
+        savedScale.value = scale.value;
+        savedTX.value = translateX.value;
+        savedTY.value = translateY.value;
+        isZoomed.value = true;
+      }
+    });
+
+  const pan = Gesture.Pan()
+    .minPointers(1)
+    .onUpdate((e) => {
+      if (isZoomed.value) {
+        translateX.value = savedTX.value + e.translationX;
+        translateY.value = savedTY.value + e.translationY;
+      }
+    })
+    .onEnd(() => {
+      if (isZoomed.value) {
+        savedTX.value = translateX.value;
+        savedTY.value = translateY.value;
+      }
+    });
+
+  const doubleTap = Gesture.Tap()
+    .numberOfTaps(2)
+    .maxDuration(300)
+    .onEnd((e) => {
+      if (isZoomed.value) {
+        resetZoom();
+      } else {
+        const targetScale = 2.5;
+        const tx = (SW / 2 - e.x) * (targetScale - 1);
+        const ty = (SH / 2 - e.y) * (targetScale - 1);
+        scale.value = withTiming(targetScale, { duration: 220 });
+        translateX.value = withTiming(tx, { duration: 220 });
+        translateY.value = withTiming(ty, { duration: 220 });
+        savedScale.value = targetScale;
+        savedTX.value = tx;
+        savedTY.value = ty;
+        isZoomed.value = true;
+      }
+    });
+
+  const singleTap = Gesture.Tap()
+    .maxDuration(250)
+    .onEnd((e) => {
+      if (isZoomed.value) return;
+      if (e.x < SW * 0.28) runOnJS(onPrev)();
+      else if (e.x > SW * 0.72) runOnJS(onNext)();
+      else runOnJS(onToggleUI)();
+    });
+
+  const composed = Gesture.Simultaneous(
+    Gesture.Exclusive(doubleTap, singleTap),
+    pinch,
+    pan
+  );
+
+  const animStyle = useAnimatedStyle(() => ({
     transform: [
       { translateX: translateX.value },
       { translateY: translateY.value },
@@ -91,78 +282,67 @@ const ZoomPage = React.memo(function ZoomPage({
     ],
   }));
 
-  const tapGesture = Gesture.Tap()
-    .onEnd((e) => {
-      if (scale.value <= 1.1) {
-        if (e.x > SW * 0.7) runOnJS(onNext)();
-        else if (e.x < SW * 0.3) runOnJS(onPrev)();
-      }
-    });
-
-  const doubleTap = Gesture.Tap()
-    .numberOfTaps(2)
-    .onEnd(() => {
-      if (scale.value > 1) {
-        scale.value = withTiming(1);
-        translateX.value = withTiming(0);
-        translateY.value = withTiming(0);
-        runOnJS(onZoomToggle)(false);
-      } else {
-        scale.value = withTiming(2);
-        runOnJS(onZoomToggle)(true);
-      }
-      savedScale.value = scale.value > 1 ? 1 : 2;
-    });
-
-  const pinchGesture = Gesture.Pinch()
-    .onUpdate((e) => {
-      scale.value = savedScale.value * e.scale;
-      if (scale.value > 1.1) runOnJS(onZoomToggle)(true);
-    })
-    .onEnd(() => {
-      if (scale.value <= 1.1) {
-        scale.value = withTiming(1);
-        translateX.value = withTiming(0);
-        translateY.value = withTiming(0);
-        runOnJS(onZoomToggle)(false);
-      }
-      savedScale.value = scale.value;
-    });
-
-  const panGesture = Gesture.Pan()
-    .onUpdate((e) => {
-      if (scale.value > 1) {
-        translateX.value = savedTranslateX.value + e.translationX;
-        translateY.value = savedTranslateY.value + e.translationY;
-      }
-    })
-    .onEnd(() => {
-      savedTranslateX.value = translateX.value;
-      savedTranslateY.value = translateY.value;
-    });
-
-  const composed = Gesture.Simultaneous(
-    Gesture.Exclusive(doubleTap, tapGesture),
-    pinchGesture,
-    panGesture
-  );
-
   return (
-    <View style={{ width: SW, height: SH, backgroundColor: '#000', justifyContent: 'center' }}>
-      <GestureDetector gesture={composed}>
-        <Animated.View style={[{ width: SW, height: SH, justifyContent: 'center' }, animatedStyle]}>
-          <Image
-            source={{ uri: `file://${uri}` }}
-            style={{ width: '100%', height: '100%' }}
-            resizeMode="contain"
-          />
-        </Animated.View>
-      </GestureDetector>
-    </View>
+    <GestureDetector gesture={composed}>
+      <Animated.View
+        style={[
+          { width: SW, height: SH, justifyContent: "center", alignItems: "center", backgroundColor: "#000" },
+          animStyle,
+        ]}
+      >
+        <Image
+          source={{ uri: `file://${uri}` }}
+          style={{ width: SW - 4, height: SH - 4 }}
+          resizeMode="contain"
+        />
+      </Animated.View>
+    </GestureDetector>
   );
 });
 
-// ─── Main PageViewer Component ────────────────────────────────────────
+// ─── Tap-zone hint ────────────────────────────────────────────────────────────
+
+const TapHint = React.memo(function TapHint() {
+  const [visible, setVisible] = useState(true);
+  const opacity = useSharedValue(1);
+
+  useEffect(() => {
+    const t = setTimeout(() => {
+      opacity.value = withTiming(0, { duration: 600 }, () => {
+        runOnJS(setVisible)(false);
+      });
+    }, 1800);
+    return () => clearTimeout(t);
+  }, []);
+
+  const style = useAnimatedStyle(() => ({ opacity: opacity.value }));
+  if (!visible) return null;
+
+  return (
+    <Animated.View
+      pointerEvents="none"
+      style={[
+        { position: "absolute", bottom: 90, left: 0, right: 0, flexDirection: "row", paddingHorizontal: 20 },
+        style,
+      ]}
+    >
+      {[
+        { label: "← Prev", align: "flex-start" as const },
+        { label: "Menu",   align: "center"     as const },
+        { label: "Next →", align: "flex-end"   as const },
+      ].map(({ label, align }) => (
+        <View key={label} style={{ flex: 1, alignItems: align }}>
+          <View style={{ backgroundColor: "rgba(0,0,0,0.65)", borderRadius: 8, paddingHorizontal: 10, paddingVertical: 5, borderWidth: 1, borderColor: "rgba(56,217,38,0.3)" }}>
+            <Text style={{ color: "rgba(255,255,255,0.6)", fontSize: 11 }}>{label}</Text>
+          </View>
+        </View>
+      ))}
+    </Animated.View>
+  );
+});
+
+// ─── Main PageViewer ──────────────────────────────────────────────────────────
+
 export const PageViewer = ({
   pages,
   initialPage,
@@ -170,113 +350,108 @@ export const PageViewer = ({
   mode,
   autoPlay,
   autoPlaySpeed,
+  onToggleUI,
 }: Props) => {
   const flatRef = useRef<FlatList<string>>(null);
-  const heightsRef = useRef<number[]>([]);
-  const [scrollEnabled, setScrollEnabled] = useState(true);
   const currentIndexRef = useRef(initialPage);
 
-  const onViewableItemsChanged = useCallback(({ viewableItems }: { viewableItems: ViewToken[] }) => {
-    if (viewableItems?.[0]) {
-      const idx = viewableItems[0].index ?? 0;
-      currentIndexRef.current = idx;
-      onPageChange(idx);
-    }
-  }, [onPageChange]);
-
-  const viewabilityConfig = useRef({ itemVisiblePercentThreshold: 50 }).current;
+  const handleToggleUI = useCallback(() => onToggleUI?.(), [onToggleUI]);
 
   const goToNext = useCallback(() => {
-    if (currentIndexRef.current < pages.length - 1) {
-      flatRef.current?.scrollToIndex({ index: currentIndexRef.current + 1, animated: true });
-    }
+    const next = currentIndexRef.current + 1;
+    if (next < pages.length)
+      flatRef.current?.scrollToIndex({ index: next, animated: true });
   }, [pages.length]);
 
   const goToPrev = useCallback(() => {
-    if (currentIndexRef.current > 0) {
-      flatRef.current?.scrollToIndex({ index: currentIndexRef.current - 1, animated: true });
-    }
+    const prev = currentIndexRef.current - 1;
+    if (prev >= 0)
+      flatRef.current?.scrollToIndex({ index: prev, animated: true });
   }, []);
 
-  // --- Fixed Autoplay Logic (TS Fixed) ---
+  const onViewableItemsChanged = useCallback(
+    ({ viewableItems }: { viewableItems: ViewToken[] }) => {
+      if (viewableItems?.[0]) {
+        const idx = viewableItems[0].index ?? 0;
+        currentIndexRef.current = idx;
+        onPageChange(idx);
+      }
+    },
+    [onPageChange]
+  );
+  const viewabilityConfig = useRef({ itemVisiblePercentThreshold: 50 }).current;
+
+  // Autoplay
   useEffect(() => {
-    let interval: ReturnType<typeof setInterval> | undefined;
-    
-    if (autoPlay && mode === "autoplay") {
-      interval = setInterval(() => {
-        goToNext();
-      }, autoPlaySpeed * 1000);
-    }
-    
-    return () => {
-      if (interval) clearInterval(interval);
-    };
+    if (!autoPlay || mode !== "autoplay") return;
+    const id = setInterval(goToNext, autoPlaySpeed * 1000);
+    return () => clearInterval(id);
   }, [autoPlay, autoPlaySpeed, mode, goToNext]);
 
-  // Handle initial page positioning
+  // Jump to initial page (horizontal/autoplay only — vertical handles it internally)
   useEffect(() => {
+    if (mode === "vertical") return;
     currentIndexRef.current = initialPage;
-    const timer: ReturnType<typeof setTimeout> = setTimeout(() => {
-      if (mode === "vertical") {
-        const offset = heightsRef.current.slice(0, initialPage).reduce((a, b) => a + (b || 0), 0);
-        flatRef.current?.scrollToOffset({ offset, animated: false });
-      } else {
-        flatRef.current?.scrollToIndex({ index: initialPage, animated: false });
-      }
+    const t = setTimeout(() => {
+      flatRef.current?.scrollToIndex({ index: initialPage, animated: false });
     }, 300);
-    return () => clearTimeout(timer);
+    return () => clearTimeout(t);
   }, [mode, initialPage]);
-
-  const renderItem = useCallback(
-    ({ item, index: i }: ListRenderItemInfo<string>) => (
-      mode === "vertical" ? (
-        <VerticalPage uri={item} onLayout={(h) => { heightsRef.current[i] = h; }} />
-      ) : (
-        <ZoomPage 
-          uri={item} 
-          onZoomToggle={(zoomed) => setScrollEnabled(!zoomed)} 
-          onNext={goToNext}
-          onPrev={goToPrev}
-        />
-      )
-    ),
-    [mode, goToNext, goToPrev]
-  );
 
   if (pages.length === 0) {
     return (
-      <View style={{ flex: 1, backgroundColor: "#000", justifyContent: "center" }}>
+      <View style={{ flex: 1, backgroundColor: "#000", justifyContent: "center", alignItems: "center" }}>
         <ActivityIndicator size="large" color="#38D926" />
       </View>
     );
   }
 
+  // ── Vertical mode: dedicated ScrollView component ─────────────────────────
+  if (mode === "vertical") {
+    return (
+      <GestureHandlerRootView style={{ flex: 1, backgroundColor: "#000" }}>
+        <StatusBar translucent backgroundColor="transparent" barStyle="light-content" />
+        <VerticalViewer
+          pages={pages}
+          initialPage={initialPage}
+          onPageChange={onPageChange}
+          onToggleUI={handleToggleUI}
+        />
+      </GestureHandlerRootView>
+    );
+  }
+
+  // ── Horizontal / autoplay: FlatList with paging ───────────────────────────
   return (
-    <GestureHandlerRootView style={{ flex: 1, backgroundColor: "#000" }}>
+    <GestureHandlerRootView style={{ flex: 1, backgroundColor: "#000", padding:3 }}>
       <StatusBar translucent backgroundColor="transparent" barStyle="light-content" />
       <FlatList
         ref={flatRef}
         data={pages}
-        keyExtractor={(item, i) => `${item}-${i}`}
-        renderItem={renderItem}
-        horizontal={mode !== "vertical"}
-        pagingEnabled={mode !== "vertical"}
-        // Disable scroll if zoomed OR if autoplay is running (to prevent user conflict)
-        scrollEnabled={scrollEnabled && !autoPlay}
+        keyExtractor={(_, i) => String(i)}
+        renderItem={({ item }: ListRenderItemInfo<string>) => (
+          <ZoomPage
+            uri={item}
+            onNext={goToNext}
+            onPrev={goToPrev}
+            onToggleUI={handleToggleUI}
+          />
+        )}
+        horizontal
+        pagingEnabled
+        scrollEnabled={!autoPlay}
+        showsHorizontalScrollIndicator={false}
         onViewableItemsChanged={onViewableItemsChanged}
         viewabilityConfig={viewabilityConfig}
-        getItemLayout={mode !== "vertical" ? (_, i) => ({
-          length: SW,
-          offset: SW * i,
-          index: i,
-        }) : undefined}
+        getItemLayout={(_, i) => ({ length: SW, offset: SW * i, index: i })}
         onScrollToIndexFailed={(info) => {
-          flatRef.current?.scrollToOffset({ 
-            offset: info.averageItemLength * info.index, 
-            animated: false 
+          flatRef.current?.scrollToOffset({
+            offset: info.averageItemLength * info.index,
+            animated: false,
           });
         }}
       />
+      <TapHint />
     </GestureHandlerRootView>
   );
 };

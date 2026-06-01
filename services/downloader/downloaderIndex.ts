@@ -4,7 +4,7 @@ import { scrapeSequential, SEQUENTIAL_PATTERN } from "./scrape/sequential";
 import type { MangaMeta }                   from "./types/manga";
 
 export const lookupManga = async (url: string): Promise<MangaMeta> => {
-  if (url.includes("nhentai.net"))    return scrapeNhentai(url);     // fetch + auto-fill
+//   if (url.includes("nhentai.net"))    return scrapeNhentai(url);     // fetch + auto-fill
   if (url.includes("mangadex.org"))   return scrapeMangaDex(url);    // fetch images, no meta
   if (SEQUENTIAL_PATTERN.test(url))   return scrapeSequential(url);  // instant, no scan yet
   throw new Error(

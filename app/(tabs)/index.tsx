@@ -1,21 +1,13 @@
 import React, { useState, useEffect } from "react";
 import {
   View,
-  Text,
-  TouchableOpacity,
-  Alert,
   StatusBar,
-  SafeAreaView,
   BackHandler,
-  Platform,
+  Alert,
 } from "react-native";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { LibraryScreen } from "../../components/ui/reader/libraryScreen";
-import {
-  PageViewer,
-  type ViewMode,
-} from "../../components/ui/reader/pageViewer";
-import { SettingsModal } from "../../components/ui/reader/settingsModal";
+import { ReaderScreen } from "../../components/ui/reader/readerScreen";
 import { HiddenMangaModal } from "../../components/ui/reader/hiddenMangaModal";
 import {
   getChapterPages,
@@ -27,10 +19,12 @@ import {
   saveReadingProgress,
 } from "../../services/reader/readingProgressService";
 import { deleteChapterFiles, deleteFullManga } from "../../services/reader/deleteManga";
+import { TouchableOpacity } from "react-native";
+import type { ViewMode } from "../../components/ui/reader/pageViewer";
 
 type Screen = "library" | "reader";
 
-export default function ReaderScreen() {
+export default function Index() {
   const [screen, setScreen] = useState<Screen>("library");
   const [selectedManga, setSelectedManga] = useState<MangaEntry | null>(null);
   const [selectedChapter, setSelectedChapter] = useState("");
@@ -39,11 +33,11 @@ export default function ReaderScreen() {
   const [mode, setMode] = useState<ViewMode>("horizontal");
   const [autoPlay, setAutoPlay] = useState(false);
   const [autoPlaySpeed, setAutoPlaySpeed] = useState(2);
-  const [settingsVisible, setSettingsVisible] = useState(false);
   const [hideVisible, setHideVisible] = useState(false);
   const [nestTaps, setNestTaps] = useState(0);
   const [refreshKey, setRefreshKey] = useState(0);
 
+  // ── Hidden manga easter egg (5 taps on top bar) ───────────────────────────
   const handleNestTap = () => {
     const next = nestTaps + 1;
     setNestTaps(next);
@@ -53,6 +47,7 @@ export default function ReaderScreen() {
     }
   };
 
+  // ── Open a chapter ────────────────────────────────────────────────────────
   const handleSelectManga = async (manga: MangaEntry, chapter: string) => {
     setSelectedManga(manga);
     setSelectedChapter(chapter);
@@ -69,19 +64,16 @@ export default function ReaderScreen() {
     }
   };
 
-  // --- Deletion Logic ---
-
+  // ── Deletion ──────────────────────────────────────────────────────────────
   const onDeleteChapter = async (uid: string, ep: string) => {
     try {
       const wasFullMangaDeleted = await deleteChapterFiles(uid, ep);
-      if (wasFullMangaDeleted) {
-        if (selectedManga?.uid === uid) {
-          setScreen("library");
-          setSelectedManga(null);
-        }
+      if (wasFullMangaDeleted && selectedManga?.uid === uid) {
+        setScreen("library");
+        setSelectedManga(null);
       }
-      setRefreshKey(prev => prev + 1);
-    } catch (err) {
+      setRefreshKey((prev) => prev + 1);
+    } catch {
       Alert.alert("Error", "Failed to delete chapter");
     }
   };
@@ -93,34 +85,32 @@ export default function ReaderScreen() {
         setScreen("library");
         setSelectedManga(null);
       }
-      setRefreshKey(prev => prev + 1);
-    } catch (err) {
+      setRefreshKey((prev) => prev + 1);
+    } catch {
       Alert.alert("Error", "Failed to delete manga from library");
     }
   };
 
-  // ✅ FIX: Handler was missing entirely — this is why rename silently failed
   const onRenameChapter = async (uid: string, oldEp: string, newEp: string) => {
     try {
       await renameChapterEp(uid, oldEp, newEp);
-      // If the currently open chapter was renamed, keep the header in sync
       if (selectedManga?.uid === uid && selectedChapter === oldEp) {
         setSelectedChapter(newEp);
       }
-      setRefreshKey(prev => prev + 1);
-    } catch (err) {
+      setRefreshKey((prev) => prev + 1);
+    } catch {
       Alert.alert("Error", "Failed to rename chapter");
     }
   };
 
-  // --- Persistence & Navigation ---
-
+  // ── Save reading progress ─────────────────────────────────────────────────
   useEffect(() => {
     if (selectedManga && selectedChapter && pages.length > 0) {
       saveReadingProgress(selectedManga.uid, selectedChapter, currentPage);
     }
   }, [currentPage]);
 
+  // ── Back navigation ───────────────────────────────────────────────────────
   const handleBack = () => {
     setScreen("library");
     setSelectedManga(null);
@@ -128,7 +118,7 @@ export default function ReaderScreen() {
     setPages([]);
     setNestTaps(0);
     setAutoPlay(false);
-    setRefreshKey(prev => prev + 1);
+    setRefreshKey((prev) => prev + 1);
   };
 
   useEffect(() => {
@@ -139,12 +129,11 @@ export default function ReaderScreen() {
       }
       return false;
     };
-    const backHandler = BackHandler.addEventListener("hardwareBackPress", backAction);
-    return () => backHandler.remove();
+    const sub = BackHandler.addEventListener("hardwareBackPress", backAction);
+    return () => sub.remove();
   }, [screen]);
 
-  // --- UI Render ---
-
+  // ── Library screen ────────────────────────────────────────────────────────
   if (screen === "library") {
     return (
       <View style={{ flex: 1 }}>
@@ -154,75 +143,48 @@ export default function ReaderScreen() {
           onSelectManga={handleSelectManga}
           onDeleteChapter={onDeleteChapter}
           onDeleteManga={onDeleteManga}
-          onRenameChapter={onRenameChapter} // ✅ FIX: now passed down
+          onRenameChapter={onRenameChapter}
           hideMode={false}
         />
+        {/* Hidden manga easter egg tap zone */}
         <TouchableOpacity
           activeOpacity={1}
           onPress={handleNestTap}
           style={{ position: "absolute", top: 0, left: 0, right: 0, height: 48 }}
         />
-        <HiddenMangaModal visible={hideVisible} onClose={() => setHideVisible(false)} />
+        <HiddenMangaModal
+          visible={hideVisible}
+          onClose={() => setHideVisible(false)}
+        />
       </View>
     );
   }
 
+  // ── Reader screen ─────────────────────────────────────────────────────────
   return (
-    <View style={{ flex: 1, backgroundColor: "#030712", paddingTop: Platform.OS === "android" ? StatusBar.currentHeight : 0 }}>
-      <StatusBar barStyle="light-content" backgroundColor="#030912" />
-      <SafeAreaView style={{ backgroundColor: "#030912" }}>
-        <View style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: 12, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: "#0a0e17", gap: 10 }}>
-          <TouchableOpacity onPress={handleBack} style={{ padding: 6, borderRadius: 8, backgroundColor: "#0a0e17" }}>
-            <MaterialCommunityIcons name="arrow-left" size={20} color="#f1f5f9" />
-          </TouchableOpacity>
-          <View style={{ flex: 1 }}>
-            <Text style={{ color: "#f1f5f9", fontWeight: "700", fontSize: 14 }} numberOfLines={1}>{selectedManga?.name}</Text>
-            {selectedChapter && (
-              <Text style={{ color: "#38D926", fontSize: 11 }} numberOfLines={1}>
-                Chapter: {selectedChapter}
-              </Text>
-            )}
-          </View>
-          <View style={{ backgroundColor: "#0a0e17", borderRadius: 8, paddingHorizontal: 10, paddingVertical: 5, borderWidth: 1, borderColor: "#141c2b" }}>
-            <Text style={{ color: "#94a3b8", fontSize: 13, fontWeight: "600" }}>
-              {currentPage + 1}
-              <Text style={{ color: "#334155" }}> / {pages.length}</Text>
-            </Text>
-          </View>
-          <TouchableOpacity
-            onPress={() => setSettingsVisible(true)}
-            style={{ padding: 6, borderRadius: 8, backgroundColor: "#0a0e17", borderWidth: 1, borderColor: settingsVisible ? "#38D926" : "#141c2b" }}
-          >
-            <MaterialCommunityIcons name="cog-outline" size={20} color={settingsVisible ? "#38D926" : "#475569"} />
-          </TouchableOpacity>
-        </View>
-      </SafeAreaView>
-
-      <View style={{ flex: 1 }}>
-        <PageViewer
-          pages={pages}
-          initialPage={currentPage}
-          onPageChange={setCurrentPage}
-          mode={mode}
-          autoPlay={autoPlay}
-          autoPlaySpeed={autoPlaySpeed}
-        />
-      </View>
-
-      <SettingsModal
-        visible={settingsVisible}
-        onClose={() => setSettingsVisible(false)}
+    <>
+      <StatusBar hidden />
+      <ReaderScreen
+        pages={pages}
+        initialPage={currentPage}
+        mangaName={selectedManga?.name ?? ""}
+        chapterLabel={`EP ${selectedChapter}`}
         mode={mode}
-        onModeChange={(m) => { setMode(m); if (m !== "autoplay") setAutoPlay(false); }}
+        onModeChange={(m) => {
+          setMode(m);
+          if (m !== "autoplay") setAutoPlay(false);
+        }}
         autoPlay={autoPlay}
         onAutoPlay={setAutoPlay}
         autoPlaySpeed={autoPlaySpeed}
         onSpeedChange={setAutoPlaySpeed}
-        currentPage={currentPage}
-        totalPages={pages.length}
-        onJumpToPage={(p) => setCurrentPage(Math.min(Math.max(0, p), pages.length - 1))}
+        onClose={handleBack}
+        onPageChange={setCurrentPage}
       />
-      <HiddenMangaModal visible={hideVisible} onClose={() => setHideVisible(false)} />
-    </View>
+      <HiddenMangaModal
+        visible={hideVisible}
+        onClose={() => setHideVisible(false)}
+      />
+    </>
   );
 }

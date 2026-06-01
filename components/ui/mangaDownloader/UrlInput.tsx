@@ -23,7 +23,7 @@ export const UrlInput = ({ value, onChange, onSubmit, onCancel, loading }: Props
       editable={!loading}
       className="flex-1 bg-[#0a0e17] border border-[#1e293b] rounded-xl px-4 py-3 text-sm text-[#f1f5f9]"
     />
-    
+
     {loading ? (
       <TouchableOpacity
         onPress={onCancel}
