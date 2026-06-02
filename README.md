@@ -1,50 +1,128 @@
-# Welcome to your Expo app 👋
+# Manga-Nest
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+A lightweight, extensible manga downloader supporting sequential chapter downloads from MangaDex and other image-based manga sources.
 
-## Get started
+---
 
-1. Install dependencies
+## Quick Links
 
-   ```bash
-   npm install
-   ```
+- **Non-developers:** Download the latest APK from the [Releases](https://github.com/yourusername/manga-nest/releases) page
+- **Developers:** See the [Development](#development) section below
 
-2. Start the app
+---
 
-   ```bash
-   npx expo start
-   ```
+## Features
 
-In the output, you'll find options to open the app in a
+- **Sequential chapter downloads** — grab entire series automatically
+- **MangaDex support** — should work
+- **Generic image scraper** — works with any site serving images in sequential URLs (e.g., `example.com/mangatitle/1.jpg`)
+- **Extensible architecture** — easily add new manga sources
+- **Cross-platform** — available as APK for Android and Node.js CLI for desktop
 
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
+---
 
-You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
+## For Users (APK)
 
-## Get a fresh project
+No setup required. Simply download the latest APK from the [Releases](https://github.com/yourusername/manga-nest/releases) page and install it on your Android device.
 
-When you're ready, run:
+---
+
+## For Developers
+
+### Prerequisites
+
+- **Node.js** `20.x` or higher
+- **npm** `10.x` or higher
+
+### Installation
 
 ```bash
-npm run reset-project
+git clone https://github.com/yourusername/manga-nest.git
+cd manga-nest
+npm install
 ```
 
-This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
+### Run the Development Server
 
-## Learn more
+```bash
+npx expo start
+```
 
-To learn more about developing your project with Expo, look at the following resources:
+### Adding New Download Sources
 
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
+To add support for additional manga websites:
 
-## Join the community
+1. Create a new scraper in `./services/downloader/scrape/`
+2. Register it in `./services/downloader/downloaderIndex.ts`
 
-Join our community of developers creating universal apps.
+#### Scraper Interface
 
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+Your scraper must return an object matching the `MangaMeta` type:
+
+```ts
+{
+	name: string;        // Manga title
+	author: string;      // Author name
+	tags: string[];      // Content tags
+	genres: string[];    // Genre classifications
+	ep: number;          // Chapter/episode number
+	source: string;      // Source website identifier
+	imageUrls: string[]; // Array of direct image URLs (in reading order)
+}
+```
+
+##### Example Scraper
+
+```ts
+// ./services/downloader/scrape/myNewSource.ts
+
+export async function scrapeMyNewSource(url: string): Promise<any> {
+  // Your scraping logic here
+  return {
+    name: "Manga Title",
+    author: "Author Name",
+    tags: ["action", "fantasy"],
+    genres: ["shonen", "adventure"],
+    ep: 1,
+    source: "myNewSource",
+    imageUrls: [
+      "https://example.com/manga/1.jpg",
+      "https://example.com/manga/2.jpg",
+    ],
+  };
+}
+```
+
+Register it in `./services/downloader/downloaderIndex.ts`:
+
+```ts
+import { scrapeMangaDex } from "./scrape/mangadex";
+import { scrapeSequential, SEQUENTIAL_PATTERN } from "./scrape/sequential";
+import { scrapeMyNewSource } from "./scrape/myNewSource";
+
+export async function scrapeFromUrl(url: string) {
+  if (url.includes("mangadex.org")) return scrapeMangaDex(url);
+  if (url.includes("mynewsource.com")) return scrapeMyNewSource(url);
+  if (SEQUENTIAL_PATTERN.test(url)) return scrapeSequential(url);
+  throw new Error("No scraper available for this URL");
+}
+```
+
+---
+
+## Development
+
+- Follow the Installation and Run sections above.
+- Keep scrapers small and well-tested. Prefer returning full image URLs to avoid additional requests.
+
+---
+
+If you find bugs or want to contribute, open an issue or submit a pull request on the repository.
+
+## Disclaimer
+
+**I am not responsible for any legal issues or consequences resulting from the use of this software. This is a hobby project created solely for my personal use with no intention of earning any profit.**
+
+**Note:** This is my first app. It is built using JavaScript (React Native/Expo), so performance may be laggy. The app was primarily created using AI. I do not use a database, which may cause unexpected issues, and I do not plan to provide ongoing bug fixes.
+
+---
