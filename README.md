@@ -6,7 +6,7 @@ A lightweight, extensible manga downloader supporting sequential chapter downloa
 
 ## Quick Links
 
-- **Non-developers:** Download the latest APK from the [Releases](https://github.com/yourusername/manga-nest/releases) page
+- **Non-developers:** Download the latest APK from the [Releases](https://github.com/Wasib-2005/Manga-Nest/releases/tag) page 
 - **Developers:** See the [Development](#development) section below
 
 ---
@@ -23,7 +23,7 @@ A lightweight, extensible manga downloader supporting sequential chapter downloa
 
 ## For Users (APK)
 
-No setup required. Simply download the latest APK from the [Releases](https://github.com/yourusername/manga-nest/releases) page and install it on your Android device.
+No setup required. Simply download the latest APK from the [Releases](https://github.com/Wasib-2005/Manga-Nest/releases) page and install it on your Android device.
 
 ---
 
