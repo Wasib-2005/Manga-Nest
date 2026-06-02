@@ -22,11 +22,17 @@ export default function TabLayout() {
         }}
       />
       <Tabs.Screen
+        name="backup"
+        options={{
+          title: "Backup",
+        }}
+      />
+      {/* <Tabs.Screen
         name="settings"
         options={{
           title: "Options",
         }}
-      />
+      /> */}
     </Tabs>
   );
 }

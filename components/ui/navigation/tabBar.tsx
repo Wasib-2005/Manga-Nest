@@ -21,7 +21,6 @@ export const CustomTabBar = ({ state, descriptors, navigation }: BottomTabBarPro
       {state.routes.map((route, index) => {
         const { options } = descriptors[route.key];
         
-        // FIX: Safely handle the label. If it's a function, we use the route name or title.
         const rawLabel = options.tabBarLabel ?? options.title ?? route.name;
         const label = typeof rawLabel === 'function' ? route.name : rawLabel;
 
@@ -43,6 +42,7 @@ export const CustomTabBar = ({ state, descriptors, navigation }: BottomTabBarPro
         let iconName: any = "help-circle-outline";
         if (route.name === "index") iconName = "bookshelf";
         if (route.name === "downloader") iconName = isFocused ? "cloud-download" : "cloud-download-outline";
+        if (route.name === "backup") iconName = isFocused ? "cloud-upload" : "cloud-upload-outline";
         if (route.name === "settings") iconName = isFocused ? "cog" : "cog-outline";
 
         return (
