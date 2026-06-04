@@ -2,7 +2,7 @@
   "expo": {
     "name": "Manga Nest",
     "slug": "Manga-Nest",
-    "version": "1.0.2",
+    "version": "1.0.3",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "manganest",
@@ -24,7 +24,7 @@
         "WRITE_EXTERNAL_STORAGE"
       ],
       "package": "com.MangaNest.waslla",
-      "versionCode": 2
+      "versionCode": 3
     },
     "web": {
       "bundler": "metro",

@@ -2,6 +2,7 @@ import { Tabs } from "expo-router";
 import { CustomTabBar } from "../../components/ui/navigation/tabBar";
 
 export default function TabLayout() {
+  
   return (
     <Tabs
       tabBar={(props) => <CustomTabBar {...props} />}
@@ -30,7 +31,7 @@ export default function TabLayout() {
       <Tabs.Screen
         name="checkUpdate"
         options={{
-          title: "Check Update",
+          title: "Updates",
         }}
       />
     </Tabs>
