@@ -9,6 +9,7 @@ const HEADERS: Record<MangaMeta["source"], Record<string, string>> = {
   mangadex:   { "User-Agent": "Mozilla/5.0", "Referer": "https://mangadex.org/" },
   nhentai:    { "User-Agent": "Mozilla/5.0", "Referer": "https://nhentai.net/"  },
   sequential: { "User-Agent": "Mozilla/5.0" },
+  hentaicity: { "User-Agent": "Mozilla/5.0", "Referer": "https://www.hentaicity.com/" },
 };
 
 // ─── Types ────────────────────────────────────────────────────────────────────

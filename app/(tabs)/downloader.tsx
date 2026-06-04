@@ -7,7 +7,9 @@ import {
   Platform,
   StatusBar,
   TouchableOpacity,
+  StyleSheet,
 } from "react-native";
+import { MaterialCommunityIcons } from "@expo/vector-icons";
 import {
   lookupManga,
   downloadManga,
@@ -23,97 +25,243 @@ import type {
   DownloadProgress,
 } from "../../services/downloader/types/manga";
 
-// ─── Types ─────────────────────────────────────────────────────────────────────
+// ─── Types ────────────────────────────────────────────────────────────────────
 
 type ItemStatus =
-  | "looking"      // metadata fetch in progress
-  | "review"       // waiting in modal review queue
-  | "queued"       // confirmed, waiting for download slot
-  | "downloading"  // actively downloading
+  | "looking"
+  | "review"
+  | "queued"
+  | "downloading"
   | "done"
   | "error"
   | "cancelled";
 
 interface QueueItem {
-  id:        string;
-  url:       string;
-  status:    ItemStatus;
-  name?:     string;
+  id: string;
+  url: string;
+  status: ItemStatus;
+  name?: string;
   errorMsg?: string;
-  // Stored after lookup, used when download starts
-  meta?:     MangaMeta;
-  edited?:   EditedMeta;
+  meta?: MangaMeta;
+  edited?: EditedMeta;
 }
 
-// ─── Helpers ───────────────────────────────────────────────────────────────────
-
-const EMPTY_EDITED: EditedMeta = { name: "", author: "", tags: "", genres: "", ep: "" };
+const EMPTY_EDITED: EditedMeta = {
+  name: "",
+  author: "",
+  tags: "",
+  genres: "",
+  ep: "",
+};
 const genId = () => Math.random().toString(36).slice(2, 9);
 
 const STATUS_ICON: Record<ItemStatus, string> = {
-  looking:     "⟳",
-  review:      "◈",
-  queued:      "○",
-  downloading: "↓",
-  done:        "✓",
-  error:       "✗",
-  cancelled:   "⊘",
+  looking: "loading",
+  review: "eye-outline",
+  queued: "clock-outline",
+  downloading: "download",
+  done: "check-circle",
+  error: "alert-circle",
+  cancelled: "cancel",
 };
 
 const STATUS_COLOR: Record<ItemStatus, string> = {
-  looking:     "#60a5fa",
-  review:      "#a78bfa",
-  queued:      "#475569",
+  looking: "#60a5fa",
+  review: "#a78bfa",
+  queued: "#475569",
   downloading: "#38D926",
-  done:        "#38D926",
-  error:       "#ef4444",
-  cancelled:   "#f59e0b",
+  done: "#38D926",
+  error: "#ef4444",
+  cancelled: "#f59e0b",
 };
 
-// ─── Component ─────────────────────────────────────────────────────────────────
+const STATUS_LABEL: Record<ItemStatus, string> = {
+  looking: "Fetching metadata…",
+  review: "Awaiting review",
+  queued: "Queued",
+  downloading: "Downloading",
+  done: "Done",
+  error: "Failed",
+  cancelled: "Skipped",
+};
+
+// ─── Queue Item Row ───────────────────────────────────────────────────────────
+
+const QueueRow = ({
+  item,
+  progress,
+  onRemove,
+}: {
+  item: QueueItem;
+  progress: DownloadProgress;
+  onRemove: (id: string) => void;
+}) => {
+  const color = STATUS_COLOR[item.status];
+  const isActive = item.status === "downloading";
+
+  return (
+    <View style={[q.row, isActive && q.rowActive]}>
+      {/* Status icon */}
+      <View
+        style={[
+          q.iconWrap,
+          { borderColor: color + "40", backgroundColor: color + "12" },
+        ]}
+      >
+        <MaterialCommunityIcons
+          name={STATUS_ICON[item.status] as any}
+          size={14}
+          color={color}
+        />
+      </View>
+
+      {/* Info */}
+      <View style={q.info}>
+        <Text style={q.name} numberOfLines={1}>
+          {item.name || item.url}
+        </Text>
+        <Text style={[q.sublabel, { color }]}>
+          {item.errorMsg || STATUS_LABEL[item.status]}
+        </Text>
+        {isActive && progress.total > 0 && (
+          <View style={q.miniBar}>
+            <View
+              style={[
+                q.miniBarFill,
+                {
+                  width:
+                    `${Math.round((progress.current / progress.total) * 100)}%` as any,
+                },
+              ]}
+            />
+          </View>
+        )}
+      </View>
+
+      {/* Remove button for queued only */}
+      {item.status === "queued" && (
+        <TouchableOpacity
+          onPress={() => onRemove(item.id)}
+          hitSlop={12}
+          style={q.removeBtn}
+        >
+          <MaterialCommunityIcons name="close" size={14} color="#334155" />
+        </TouchableOpacity>
+      )}
+
+      {/* Page count badge for active */}
+      {isActive && progress.total > 0 && (
+        <View style={q.countBadge}>
+          <Text style={q.countText}>
+            {progress.current}/{progress.total}
+          </Text>
+        </View>
+      )}
+    </View>
+  );
+};
+
+const q = StyleSheet.create({
+  row: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#0a0e17",
+    borderRadius: 14,
+    padding: 12,
+    marginBottom: 8,
+    borderWidth: 1,
+    borderColor: "#141c2b",
+    gap: 10,
+  },
+  rowActive: {
+    borderColor: "#38D92630",
+    backgroundColor: "#38D92606",
+  },
+  iconWrap: {
+    width: 32,
+    height: 32,
+    borderRadius: 9,
+    borderWidth: 1,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  info: { flex: 1, gap: 3 },
+  name: { color: "#f1f5f9", fontSize: 12, fontWeight: "700" },
+  sublabel: { fontSize: 10, fontWeight: "600" },
+  miniBar: {
+    height: 3,
+    backgroundColor: "#1e293b",
+    borderRadius: 2,
+    overflow: "hidden",
+    marginTop: 2,
+  },
+  miniBarFill: {
+    height: "100%",
+    backgroundColor: "#38D926",
+    borderRadius: 2,
+  },
+  removeBtn: {
+    width: 26,
+    height: 26,
+    borderRadius: 8,
+    backgroundColor: "#1e293b",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  countBadge: {
+    backgroundColor: "#38D92618",
+    borderRadius: 6,
+    paddingHorizontal: 6,
+    paddingVertical: 3,
+    borderWidth: 1,
+    borderColor: "#38D92640",
+  },
+  countText: { color: "#38D926", fontSize: 9, fontWeight: "800" },
+});
+
+// ─── Main Screen ──────────────────────────────────────────────────────────────
 
 export default function Downloader() {
-  const [urlInput,  setUrlInput]  = useState("");
-  const [queue,     setQueue]     = useState<QueueItem[]>([]);
-  const [progress,  setProgress]  = useState<DownloadProgress>({ message: "", current: 0, total: 0 });
-  const [logs,      setLogs]      = useState<string[]>([]);
+  const [urlInput, setUrlInput] = useState("");
+  const [queue, setQueue] = useState<QueueItem[]>([]);
+  const [progress, setProgress] = useState<DownloadProgress>({
+    message: "",
+    current: 0,
+    total: 0,
+  });
+  const [logs, setLogs] = useState<string[]>([]);
+  const [logsOpen, setLogsOpen] = useState(false);
 
-  // Modal state — shows one review at a time
-  const [modalOpen,    setModalOpen]    = useState(false);
-  const [modalMeta,    setModalMeta]    = useState<MangaMeta | null>(null);
-  const [modalEdited,  setModalEdited]  = useState<EditedMeta>(EMPTY_EDITED);
-  const [modalItemId,  setModalItemId]  = useState<string | null>(null);
+  const [modalOpen, setModalOpen] = useState(false);
+  const [modalMeta, setModalMeta] = useState<MangaMeta | null>(null);
+  const [modalEdited, setModalEdited] = useState<EditedMeta>(EMPTY_EDITED);
+  const [modalItemId, setModalItemId] = useState<string | null>(null);
 
-  const cancelDownloadRef = useRef({ cancelled: false });
-  const queueRef          = useRef<QueueItem[]>([]);
-  // IDs of items whose metadata is ready but modal hasn't shown yet
-  const reviewQueueRef    = useRef<string[]>([]);
-  // Whether the download worker is currently running
-  const downloadingRef    = useRef(false);
-
-  // ── Queue sync ──────────────────────────────────────────────────────────────
+  const cancelRef = useRef({ cancelled: false });
+  const queueRef = useRef<QueueItem[]>([]);
+  const reviewQueueRef = useRef<string[]>([]);
+  const downloadingRef = useRef(false);
 
   const syncQueue = (next: QueueItem[]) => {
     queueRef.current = next;
     setQueue(next);
   };
-
   const updateItem = (id: string, patch: Partial<QueueItem>) =>
-    syncQueue(queueRef.current.map(q => q.id === id ? { ...q, ...patch } : q));
-
-  const log = (msg: string) => setLogs(p => [...p, msg]);
-
-  // ── Add URL → lookup immediately, independent of downloads ─────────────────
+    syncQueue(
+      queueRef.current.map((q) => (q.id === id ? { ...q, ...patch } : q)),
+    );
+  const log = (msg: string) => setLogs((p) => [...p.slice(-199), msg]);
 
   const handleAddUrl = () => {
     const trimmed = urlInput.trim();
     if (!trimmed) return;
-
-    // Skip exact duplicate that's still active
-    if (queueRef.current.some(q =>
-      q.url === trimmed &&
-      !["done", "error", "cancelled"].includes(q.status)
-    )) {
+    if (
+      queueRef.current.some(
+        (q) =>
+          q.url === trimmed &&
+          !["done", "error", "cancelled"].includes(q.status),
+      )
+    ) {
       setUrlInput("");
       return;
     }
@@ -121,46 +269,40 @@ export default function Downloader() {
     const id = genId();
     syncQueue([...queueRef.current, { id, url: trimmed, status: "looking" }]);
     setUrlInput("");
-
-    // Fire lookup immediately — does NOT wait for any download
     runLookup(id, trimmed);
   };
-
-  // ── Lookup pipeline (always immediate) ─────────────────────────────────────
 
   const runLookup = async (id: string, url: string) => {
     try {
       const m = await lookupManga(url);
-
       const resolved: EditedMeta = {
-        name:   m.name   || "",
+        name: m.name || "",
         author: m.author || "",
-        tags:   Array.isArray(m.tags)   ? m.tags.join(", ")   : "",
+        tags: Array.isArray(m.tags) ? m.tags.join(", ") : "",
         genres: Array.isArray(m.genres) ? m.genres.join(", ") : "",
-        ep:     m.ep     || "",
+        ep: m.ep || "",
       };
-
-      // Save meta+edited on the item, mark as review
-      updateItem(id, { status: "review", name: m.name, meta: m, edited: resolved });
-
-      // Push into the modal review queue and try to show it
+      updateItem(id, {
+        status: "review",
+        name: m.name,
+        meta: m,
+        edited: resolved,
+      });
       reviewQueueRef.current.push(id);
       tryShowNextReview();
     } catch (e: any) {
-      updateItem(id, { status: "error", errorMsg: e.message || "Lookup failed" });
+      updateItem(id, {
+        status: "error",
+        errorMsg: e.message || "Lookup failed",
+      });
     }
   };
 
-  // ── Modal review queue — show one modal at a time ──────────────────────────
-
   const tryShowNextReview = () => {
-    if (modalOpen) return; // already showing one, will re-trigger on close
-    if (reviewQueueRef.current.length === 0) return;
-
+    if (modalOpen || reviewQueueRef.current.length === 0) return;
     const nextId = reviewQueueRef.current.shift()!;
-    const item   = queueRef.current.find(q => q.id === nextId);
-    if (!item || !item.meta || !item.edited) return;
-
+    const item = queueRef.current.find((q) => q.id === nextId);
+    if (!item?.meta || !item?.edited) return;
     setModalItemId(nextId);
     setModalMeta(item.meta);
     setModalEdited(item.edited);
@@ -169,49 +311,34 @@ export default function Downloader() {
 
   const handleModalClose = () => {
     setModalOpen(false);
-    // Show next queued review after a tick (lets modal animate out)
     setTimeout(tryShowNextReview, 300);
   };
-
-  // ── User confirms metadata → add to download queue ─────────────────────────
 
   const handleConfirm = () => {
     if (!modalItemId || !modalMeta) return;
-    const id = modalItemId;
-
-    // Persist the (possibly edited) meta back onto the item
-    updateItem(id, { status: "queued", edited: modalEdited });
-
+    updateItem(modalItemId, { status: "queued", edited: modalEdited });
     setModalOpen(false);
     setTimeout(tryShowNextReview, 300);
-
-    // Kick off the download worker if it's idle
-    if (!downloadingRef.current) {
-      runNextDownload();
-    }
+    if (!downloadingRef.current) runNextDownload();
   };
-
-  // ── User skips item in modal ────────────────────────────────────────────────
 
   const handleSkip = () => {
     if (modalItemId) updateItem(modalItemId, { status: "cancelled" });
     handleModalClose();
   };
 
-  // ── Download worker — processes one "queued" item at a time ────────────────
-
   const runNextDownload = async () => {
-    const item = queueRef.current.find(q => q.status === "queued");
-    if (!item || !item.meta || !item.edited) {
+    const item = queueRef.current.find((q) => q.status === "queued");
+    if (!item?.meta || !item?.edited) {
       downloadingRef.current = false;
       return;
     }
 
     downloadingRef.current = true;
-    cancelDownloadRef.current.cancelled = false;
-
+    cancelRef.current.cancelled = false;
     updateItem(item.id, { status: "downloading" });
     setLogs([]);
+    setLogsOpen(true);
     setProgress({ message: "", current: 0, total: 0 });
 
     try {
@@ -222,175 +349,179 @@ export default function Downloader() {
           setProgress(p);
           if (p.message) log(p.message);
         },
-        cancelDownloadRef.current,
+        cancelRef.current,
         log,
       );
-
       updateItem(item.id, { status: "done" });
     } catch (e: any) {
       const isCancelled = e.message === "CANCELLED";
       updateItem(item.id, {
-        status:   isCancelled ? "cancelled" : "error",
-        errorMsg: isCancelled ? undefined : (e.message || "Download failed"),
+        status: isCancelled ? "cancelled" : "error",
+        errorMsg: isCancelled ? undefined : e.message || "Download failed",
       });
       if (isCancelled) {
         downloadingRef.current = false;
         return;
       }
     }
-
-    // Move to next queued item
     runNextDownload();
   };
 
-  // ── Misc ────────────────────────────────────────────────────────────────────
-
   const removeItem = (id: string) =>
-    syncQueue(queueRef.current.filter(q => q.id !== id));
-
+    syncQueue(queueRef.current.filter((q) => q.id !== id));
   const clearFinished = () =>
-    syncQueue(queueRef.current.filter(q =>
-      !["done", "error", "cancelled"].includes(q.status)
-    ));
-
+    syncQueue(
+      queueRef.current.filter(
+        (q) => !["done", "error", "cancelled"].includes(q.status),
+      ),
+    );
   const patchEdited = (key: keyof EditedMeta) => (val: string) =>
-    setModalEdited(p => ({ ...p, [key]: val }));
+    setModalEdited((p) => ({ ...p, [key]: val }));
 
-  // ── Derived ─────────────────────────────────────────────────────────────────
-
-  const activeDownload  = queue.find(q => q.status === "downloading");
-  const hasFinished     = queue.some(q => ["done", "error", "cancelled"].includes(q.status));
-  const doneCount       = queue.filter(q => q.status === "done").length;
-
-  // phase prop MetaModal needs — only "review" or "downloading" matter here
+  const activeDownload = queue.find((q) => q.status === "downloading");
+  const pendingCount = queue.filter((q) =>
+    ["looking", "review", "queued"].includes(q.status),
+  ).length;
+  const doneCount = queue.filter((q) => q.status === "done").length;
+  const hasFinished = queue.some((q) =>
+    ["done", "error", "cancelled"].includes(q.status),
+  );
   const modalPhase: Phase = "review";
-
-  // ── Render ──────────────────────────────────────────────────────────────────
 
   return (
     <KeyboardAvoidingView
       behavior={Platform.OS === "ios" ? "padding" : undefined}
-      className="flex-1"
+      style={{ flex: 1 }}
     >
       <StatusBar barStyle="light-content" backgroundColor="#030712" />
       <ScrollView
-        className="flex-1 bg-[#030712]"
-        contentContainerStyle={{ padding: 20, paddingTop: 60 }}
+        style={styles.scroll}
+        contentContainerStyle={styles.scrollContent}
         keyboardShouldPersistTaps="handled"
       >
-
-        {/* ── Header ─────────────────────────────────────────────────────── */}
-        <View className="mb-8">
-          <Text className="text-3xl font-black text-[#f1f5f9] tracking-tight">
-            <Text>Manga </Text>
-            <Text className="text-[#38D926]">Nest</Text>
+        {/* ── Header ── */}
+        <View>
+          <Text
+            style={{
+              fontSize: 16,
+              fontWeight: "bold",
+              color: "#f1f5f9",
+              // letterSpacing: 1,
+              lineHeight: 34,
+            }}
+          >
+            Downloader
           </Text>
-          <Text className="font-normal text-[11px] text-white mt-[-1rem] ml-[10.3rem]">
-            -Downloader
-          </Text>
+          <View style={{ flexDirection: "row", alignItems: "center" }}>
+            <Text
+              style={{
+                fontSize: 30,
+                fontWeight: "bold",
+                color: "white",
+                letterSpacing: 4,
+                marginBottom: 6,
+              }}
+            >
+              {"\t\tManga"}
+            </Text>
+            <Text
+              style={{
+                fontSize: 30,
+                fontWeight: "bold",
+                color: "#38D926",
+                letterSpacing: 4,
+                marginBottom: 6,
+              }}
+            >
+              Nest
+            </Text>
+          </View>
         </View>
 
-        {/* ── URL input — always available ────────────────────────────────── */}
+        {/* ── URL input ── */}
         <UrlInput
           value={urlInput}
           onChange={setUrlInput}
           onSubmit={handleAddUrl}
-          loading={false}   // lookup is fire-and-forget, no spinner on input
+          loading={false}
           onCancel={() => {}}
         />
 
-        {/* ── Active download banner ──────────────────────────────────────── */}
+        {/* ── Active download card ── */}
         {activeDownload && (
-          <View className="mb-4 bg-[#0f172a] border border-[#1e293b] rounded-2xl px-4 py-3">
-            <View className="flex-row justify-between items-center mb-2">
-              <Text className="text-[#38D926] text-[10px] font-bold uppercase tracking-widest">
-                Downloading
-              </Text>
+          <View style={styles.activeCard}>
+            <View style={styles.activeCardHeader}>
+              <View style={styles.activeCardLeft}>
+                <View style={styles.activePulse} />
+                <Text style={styles.activeCardLabel}>Downloading</Text>
+              </View>
               <TouchableOpacity
-                onPress={() => { cancelDownloadRef.current.cancelled = true; }}
-                className="bg-red-500/20 border border-red-500 rounded-lg px-3 py-1"
+                onPress={() => {
+                  cancelRef.current.cancelled = true;
+                }}
+                style={styles.stopBtn}
               >
-                <Text className="text-red-500 text-[10px] font-bold">STOP</Text>
+                <MaterialCommunityIcons name="stop" size={12} color="#ef4444" />
+                <Text style={styles.stopBtnText}>Stop</Text>
               </TouchableOpacity>
             </View>
-            <Text className="text-[#f1f5f9] text-xs mb-2" numberOfLines={1}>
+            <Text style={styles.activeCardName} numberOfLines={1}>
               {activeDownload.name || activeDownload.url}
             </Text>
             <ProgressBar current={progress.current} total={progress.total} />
           </View>
         )}
 
-        {/* ── Queue list ──────────────────────────────────────────────────── */}
+        {/* ── Queue ── */}
         {queue.length > 0 && (
-          <View className="mt-2">
-            <View className="flex-row justify-between items-center mb-3">
-              <Text className="text-[#38D926] text-[10px] font-bold uppercase tracking-widest">
-                Queue · {doneCount}/{queue.length} done
+          <View style={styles.section}>
+            <View style={styles.sectionHeader}>
+              <Text style={styles.sectionTitle}>
+                Queue
+                <Text style={{ color: "#38D926" }}>
+                  {" "}
+                  · {doneCount}/{queue.length}
+                </Text>
               </Text>
               {hasFinished && (
                 <TouchableOpacity onPress={clearFinished}>
-                  <Text className="text-[#475569] text-[10px] font-semibold">
-                    Clear finished
-                  </Text>
+                  <Text style={styles.clearBtn}>Clear done</Text>
                 </TouchableOpacity>
               )}
             </View>
-
-            {queue.map(item => (
-              <View
+            {queue.map((item) => (
+              <QueueRow
                 key={item.id}
-                className="flex-row items-center bg-[#0f172a] border border-[#1e293b] rounded-xl px-3 py-2 mb-2"
-              >
-                <Text style={{ color: STATUS_COLOR[item.status], width: 18, textAlign: "center", fontSize: 13 }}>
-                  {STATUS_ICON[item.status]}
-                </Text>
-
-                <View className="flex-1 mx-2">
-                  <Text className="text-[#f1f5f9] text-[11px]" numberOfLines={1}>
-                    {item.name || item.url}
-                  </Text>
-                  {item.status === "looking" && (
-                    <Text className="text-[#60a5fa] text-[9px] mt-0.5">Fetching metadata…</Text>
-                  )}
-                  {item.status === "review" && (
-                    <Text className="text-[#a78bfa] text-[9px] mt-0.5">Waiting for review…</Text>
-                  )}
-                  {item.status === "queued" && (
-                    <Text className="text-[#475569] text-[9px] mt-0.5">Queued for download…</Text>
-                  )}
-                  {item.errorMsg && (
-                    <Text className="text-red-400 text-[9px] mt-0.5" numberOfLines={1}>
-                      {item.errorMsg}
-                    </Text>
-                  )}
-                </View>
-
-                {item.status === "downloading" && (
-                  <View style={{ width: 56 }}>
-                    <ProgressBar current={progress.current} total={progress.total} />
-                  </View>
-                )}
-
-                {(item.status === "queued") && (
-                  <TouchableOpacity onPress={() => removeItem(item.id)} hitSlop={10}>
-                    <Text className="text-[#334155] text-base leading-none">✕</Text>
-                  </TouchableOpacity>
-                )}
-              </View>
+                item={item}
+                progress={progress}
+                onRemove={removeItem}
+              />
             ))}
           </View>
         )}
 
-        {/* ── Log console ─────────────────────────────────────────────────── */}
+        {/* ── Log console ── */}
         {logs.length > 0 && (
-          <View className="mt-4">
-            <LogConsole logs={logs} loading={!!activeDownload} />
+          <View style={styles.section}>
+            <TouchableOpacity
+              style={styles.sectionHeader}
+              onPress={() => setLogsOpen((p) => !p)}
+            >
+              <Text style={styles.sectionTitle}>Console</Text>
+              <View style={styles.logToggle}>
+                <MaterialCommunityIcons
+                  name={logsOpen ? "chevron-up" : "chevron-down"}
+                  size={16}
+                  color="#475569"
+                />
+              </View>
+            </TouchableOpacity>
+            {logsOpen && <LogConsole logs={logs} loading={!!activeDownload} />}
           </View>
         )}
-
       </ScrollView>
 
-      {/* ── MetaModal ────────────────────────────────────────────────────── */}
+      {/* ── MetaModal ── */}
       <MetaModal
         visible={modalOpen}
         meta={modalMeta}
@@ -401,7 +532,121 @@ export default function Downloader() {
         onCancel={handleSkip}
         onClose={handleModalClose}
       />
-
     </KeyboardAvoidingView>
   );
 }
+
+const styles = StyleSheet.create({
+  scroll: { flex: 1, backgroundColor: "#030712" },
+  scrollContent: { padding: 20, paddingTop: 60, paddingBottom: 40 },
+
+  header: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "flex-end",
+    marginBottom: 24,
+  },
+  logoText: {
+    fontSize: 28,
+    fontWeight: "900",
+    color: "#f1f5f9",
+    letterSpacing: -0.5,
+  },
+  logoSub: {
+    fontSize: 11,
+    color: "rgba(255,255,255,0.3)",
+    fontWeight: "600",
+    marginTop: 2,
+  },
+  statsRow: { flexDirection: "row", gap: 6, alignItems: "center" },
+  statBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 8,
+    backgroundColor: "#38D92610",
+    borderWidth: 1,
+    borderColor: "#38D92630",
+  },
+  statDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: "#38D926",
+  },
+  statText: { color: "#38D926", fontSize: 10, fontWeight: "700" },
+
+  // Active download card
+  activeCard: {
+    backgroundColor: "#0a0e17",
+    borderRadius: 18,
+    padding: 16,
+    marginBottom: 20,
+    borderWidth: 1,
+    borderColor: "#38D92630",
+  },
+  activeCardHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 8,
+  },
+  activeCardLeft: { flexDirection: "row", alignItems: "center", gap: 8 },
+  activePulse: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: "#38D926",
+  },
+  activeCardLabel: {
+    color: "#38D926",
+    fontSize: 10,
+    fontWeight: "900",
+    textTransform: "uppercase",
+    letterSpacing: 1.5,
+  },
+  activeCardName: {
+    color: "#f1f5f9",
+    fontSize: 13,
+    fontWeight: "700",
+    marginBottom: 10,
+  },
+  stopBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    backgroundColor: "#ef444418",
+    borderWidth: 1,
+    borderColor: "#ef4444",
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 8,
+  },
+  stopBtnText: { color: "#ef4444", fontSize: 10, fontWeight: "800" },
+
+  // Section
+  section: { marginBottom: 20 },
+  sectionHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 12,
+  },
+  sectionTitle: {
+    color: "rgba(255,255,255,0.35)",
+    fontSize: 10,
+    fontWeight: "800",
+    textTransform: "uppercase",
+    letterSpacing: 1.5,
+  },
+  clearBtn: { color: "#334155", fontSize: 10, fontWeight: "700" },
+  logToggle: {
+    backgroundColor: "#0a0e17",
+    borderRadius: 6,
+    padding: 2,
+    borderWidth: 1,
+    borderColor: "#1e293b",
+  },
+});

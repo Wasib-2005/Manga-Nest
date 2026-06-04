@@ -1,7 +1,7 @@
 {
   "name": "manga-nest",
   "main": "expo-router/entry",
-  "version": "1.0.0",
+  "version": "1.0.2",
   "scripts": {
     "start": "expo start",
     "reset-project": "node ./scripts/reset-project.js",
@@ -16,6 +16,7 @@
     "babel-preset-expo": "~56.0.0",
     "buffer": "^6.0.3",
     "expo": "^56.0.8",
+    "expo-application": "~56.0.3",
     "expo-clipboard": "~56.0.3",
     "expo-constants": "^56.0.16",
     "expo-crypto": "~56.0.4",

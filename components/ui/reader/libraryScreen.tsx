@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from "react";
+import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import {
   View,
   Text,
@@ -23,7 +23,11 @@ import {
   type MangaEntry,
   type ChapterInfo,
 } from "../../../services/reader/libraryService";
-import { getHiddenMangaList } from "../../../services/reader/readingProgressService";
+import {
+  getHiddenMangaList,
+  getRecentlyReadMap,
+  type RecentEntry,
+} from "../../../services/reader/readingProgressService";
 import { ChapterPickerModal } from "./chapterPickerModal";
 import { EditMangaModal } from "./editMangaModal";
 
@@ -31,7 +35,17 @@ const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get("window");
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-type SortKey = "newest" | "oldest" | "az" | "za" | "most-eps" | "least-eps" | "source";
+type SortKey =
+  | "recent"      // recently read first (default)
+  | "newest"
+  | "oldest"
+  | "az"
+  | "za"
+  | "most-eps"
+  | "least-eps"
+  | "unread"      // never opened first
+  | "source";
+
 type LayoutMode = "hero" | "list" | "grid" | "compact";
 
 interface ActiveFilters {
@@ -45,13 +59,24 @@ interface FlatItem {
   chapter: ChapterInfo;
 }
 
+// ─── Pagination ───────────────────────────────────────────────────────────────
+
+const PAGE_SIZE = 24; // items per page
+
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-// Each entry is a pair [primary, inverse]. Tapping the active key flips to its partner.
+/**
+ * SORT_PAIRS — each entry is [primary, inverse].
+ * Tapping the active key flips to its partner.
+ */
 const SORT_PAIRS: {
   primary: SortKey; primaryLabel: string; primaryIcon: string;
   inverse: SortKey; inverseLabel: string; inverseIcon: string;
 }[] = [
+  {
+    primary: "recent",    primaryLabel: "Recent",    primaryIcon: "history",
+    inverse: "unread",    inverseLabel: "Unread",    inverseIcon: "book-open-blank-variant",
+  },
   {
     primary: "newest",    primaryLabel: "Newest",    primaryIcon: "clock-outline",
     inverse: "oldest",    inverseLabel: "Oldest",    inverseIcon: "clock-check-outline",
@@ -80,9 +105,37 @@ const EMPTY_FILTERS: ActiveFilters = { tags: [], genres: [], sources: [] };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-function sortManga(list: MangaEntry[], key: SortKey): MangaEntry[] {
+function sortManga(
+  list: MangaEntry[],
+  key: SortKey,
+  recentMap: Map<string, RecentEntry>
+): MangaEntry[] {
   const copy = [...list];
   switch (key) {
+    case "recent": {
+      // Manga that has been read: sort by readAt desc.
+      // Never-read manga goes at the bottom, sorted by addedAt desc.
+      return copy.sort((a, b) => {
+        const ra = recentMap.get(a.uid);
+        const rb = recentMap.get(b.uid);
+        if (ra && rb) return rb.readAt.localeCompare(ra.readAt);
+        if (ra)        return -1; // a was read → comes first
+        if (rb)        return  1; // b was read → comes first
+        // Neither read → fall back to newest added
+        return +new Date(b.addedAt) - +new Date(a.addedAt);
+      });
+    }
+    case "unread":
+      // Never-read first, then least-recently-read
+      return copy.sort((a, b) => {
+        const ra = recentMap.get(a.uid);
+        const rb = recentMap.get(b.uid);
+        if (!ra && !rb) return +new Date(b.addedAt) - +new Date(a.addedAt);
+        if (!ra)        return -1;
+        if (!rb)        return  1;
+        // Both read — least recent first
+        return ra.readAt.localeCompare(rb.readAt);
+      });
     case "az":        return copy.sort((a, b) => a.name.localeCompare(b.name));
     case "za":        return copy.sort((a, b) => b.name.localeCompare(a.name));
     case "newest":    return copy.sort((a, b) => +new Date(b.addedAt) - +new Date(a.addedAt));
@@ -101,6 +154,12 @@ function applyFilters(list: MangaEntry[], filters: ActiveFilters): MangaEntry[] 
     if (filters.genres.length > 0 && !filters.genres.some((g) => m.genres.includes(g))) return false;
     return true;
   });
+}
+
+/** Format read progress like "3/12" */
+function fmtProgress(entry: RecentEntry | undefined): string | null {
+  if (!entry || !entry.totalPages) return null;
+  return `${entry.page + 1}/${entry.totalPages}`;
 }
 
 // ─── Image Sub-Components ─────────────────────────────────────────────────────
@@ -146,19 +205,50 @@ const CoverImage = React.memo(({
 });
 CoverImage.displayName = "CoverImage";
 
+// ─── Progress Badge ───────────────────────────────────────────────────────────
+
+const ProgressBadge = ({ entry, compact = false }: { entry?: RecentEntry; compact?: boolean }) => {
+  const label = fmtProgress(entry);
+  if (!label) return null;
+
+  const isComplete = entry && entry.totalPages > 0 && entry.page >= entry.totalPages - 1;
+
+  return (
+    <View style={[
+      styles.progressBadge,
+      isComplete && styles.progressBadgeComplete,
+      compact && { paddingHorizontal: 4, paddingVertical: 2 },
+    ]}>
+      <Text style={[styles.progressBadgeText, compact && { fontSize: 8 }]}>
+        {isComplete ? "✓" : label}
+      </Text>
+    </View>
+  );
+};
+
 // ─── AdaptiveCard ─────────────────────────────────────────────────────────────
 
-const AdaptiveCard = React.memo(({ item, mode }: { item: MangaEntry; mode: LayoutMode }) => {
+const AdaptiveCard = React.memo(({
+  item, mode, recentEntry,
+}: {
+  item: MangaEntry;
+  mode: LayoutMode;
+  recentEntry?: RecentEntry;
+}) => {
   const firstEp = item.chapters[0]?.ep ?? "";
   const srcColor = SRC_COLOR[item.source] ?? "#64748b";
   const isCompact = mode === "compact";
+  const wasRead = !!recentEntry;
 
   if (mode === "hero") {
     return (
       <View style={{ marginBottom: 32, paddingHorizontal: 16 }}>
         <CoverImage uid={item.uid} firstEp={firstEp} autoHeight />
         <View style={{ marginTop: 14 }}>
-          <Text style={{ color: srcColor, fontWeight: "900", fontSize: 12 }}>{item.source.toUpperCase()}</Text>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+            <Text style={{ color: srcColor, fontWeight: "900", fontSize: 12 }}>{item.source.toUpperCase()}</Text>
+            <ProgressBadge entry={recentEntry} />
+          </View>
           <Text style={{ color: "#f1f5f9", fontWeight: "900", fontSize: 22, marginTop: 4 }}>{item.name}</Text>
           {item.tags.length > 0 && (
             <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: 8 }}>
@@ -178,7 +268,7 @@ const AdaptiveCard = React.memo(({ item, mode }: { item: MangaEntry; mode: Layou
 
   if (mode === "list") {
     return (
-      <View style={{ flexDirection: "row", gap: 14, backgroundColor: "#0a0e17", borderRadius: 16, padding: 12, marginBottom: 12, marginHorizontal: 16, borderWidth: 1, borderColor: "#141c2b" }}>
+      <View style={{ flexDirection: "row", gap: 14, backgroundColor: "#0a0e17", borderRadius: 16, padding: 12, marginBottom: 12, marginHorizontal: 16, borderWidth: 1, borderColor: wasRead ? "#38D92630" : "#141c2b" }}>
         <View style={{ width: 80, height: 110 }}><CoverImage uid={item.uid} firstEp={firstEp} height={110} /></View>
         <View style={{ flex: 1, justifyContent: "space-between" }}>
           <View>
@@ -190,15 +280,29 @@ const AdaptiveCard = React.memo(({ item, mode }: { item: MangaEntry; mode: Layou
               </Text>
             )}
           </View>
-          <Text style={{ color: "#38D926", fontSize: 12, fontWeight: "800" }}>{item.chapters.length} Eps</Text>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+            <Text style={{ color: "#38D926", fontSize: 12, fontWeight: "800" }}>{item.chapters.length} Eps</Text>
+            <ProgressBadge entry={recentEntry} />
+          </View>
         </View>
       </View>
     );
   }
 
+  // grid / compact
   return (
-    <View style={{ marginBottom: 16 }}>
+    <View style={{ marginBottom: 16, position: "relative" }}>
       <CoverImage uid={item.uid} firstEp={firstEp} height={isCompact ? 130 : 180} />
+      {/* Progress badge overlay */}
+      {recentEntry && (
+        <View style={styles.badgeOverlay}>
+          <ProgressBadge entry={recentEntry} compact={isCompact} />
+        </View>
+      )}
+      {/* Unread dot */}
+      {!wasRead && (
+        <View style={styles.unreadDot} />
+      )}
       <View style={{ marginTop: 6, paddingHorizontal: 2 }}>
         <Text style={{ color: "#f1f5f9", fontWeight: "600", fontSize: isCompact ? 10 : 12 }} numberOfLines={1}>{item.name}</Text>
         <Text style={{ color: "#38D926", fontSize: 9, fontWeight: "700" }}>{item.chapters.length} Eps</Text>
@@ -210,10 +314,18 @@ AdaptiveCard.displayName = "AdaptiveCard";
 
 // ─── FlatCard ─────────────────────────────────────────────────────────────────
 
-const FlatCard = React.memo(({ item, mode }: { item: FlatItem; mode: LayoutMode }) => {
+const FlatCard = React.memo(({
+  item, mode, recentEntry,
+}: {
+  item: FlatItem;
+  mode: LayoutMode;
+  recentEntry?: RecentEntry;
+}) => {
   const { manga, chapter } = item;
   const srcColor = SRC_COLOR[manga.source] ?? "#64748b";
   const isCompact = mode === "compact";
+  // Match recentEntry ep to this chapter
+  const chapterEntry = recentEntry?.ep === chapter.ep ? recentEntry : undefined;
 
   if (mode === "list") {
     return (
@@ -225,15 +337,23 @@ const FlatCard = React.memo(({ item, mode }: { item: FlatItem; mode: LayoutMode 
             <Text style={{ color: "#f1f5f9", fontWeight: "700", fontSize: 14 }} numberOfLines={2}>{manga.name}</Text>
             <Text style={{ color: "#38D926", fontSize: 12, marginTop: 4, fontWeight: "800" }}>EP {chapter.ep}</Text>
           </View>
-          <Text style={{ color: "#475569", fontSize: 10 }}>{chapter.pages} pages</Text>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+            <Text style={{ color: "#475569", fontSize: 10 }}>{chapter.pages} pages</Text>
+            <ProgressBadge entry={chapterEntry} />
+          </View>
         </View>
       </View>
     );
   }
 
   return (
-    <View style={{ marginBottom: 16 }}>
+    <View style={{ marginBottom: 16, position: "relative" }}>
       <CoverImage uid={manga.uid} firstEp={chapter.ep} height={isCompact ? 130 : 180} />
+      {chapterEntry && (
+        <View style={styles.badgeOverlay}>
+          <ProgressBadge entry={chapterEntry} compact={isCompact} />
+        </View>
+      )}
       <View style={{ marginTop: 6, paddingHorizontal: 2 }}>
         <Text style={{ color: "#f1f5f9", fontWeight: "600", fontSize: isCompact ? 10 : 12 }} numberOfLines={1}>{manga.name}</Text>
         <Text style={{ color: "#38D926", fontSize: 9, fontWeight: "700" }}>EP {chapter.ep}</Text>
@@ -242,6 +362,91 @@ const FlatCard = React.memo(({ item, mode }: { item: FlatItem; mode: LayoutMode 
   );
 });
 FlatCard.displayName = "FlatCard";
+
+// ─── Pagination Controls ──────────────────────────────────────────────────────
+
+const PaginationBar = ({
+  currentPage,
+  totalPages,
+  onPrev,
+  onNext,
+  onGoTo,
+  totalItems,
+  pageSize,
+}: {
+  currentPage: number;
+  totalPages: number;
+  onPrev: () => void;
+  onNext: () => void;
+  onGoTo: (page: number) => void;
+  totalItems: number;
+  pageSize: number;
+}) => {
+  if (totalPages <= 1) return null;
+
+  const start = currentPage * pageSize + 1;
+  const end   = Math.min((currentPage + 1) * pageSize, totalItems);
+
+  // Show at most 5 page numbers around current
+  const pageNumbers: (number | "...")[] = [];
+  if (totalPages <= 7) {
+    for (let i = 0; i < totalPages; i++) pageNumbers.push(i);
+  } else {
+    pageNumbers.push(0);
+    if (currentPage > 2) pageNumbers.push("...");
+    for (let i = Math.max(1, currentPage - 1); i <= Math.min(totalPages - 2, currentPage + 1); i++) {
+      pageNumbers.push(i);
+    }
+    if (currentPage < totalPages - 3) pageNumbers.push("...");
+    pageNumbers.push(totalPages - 1);
+  }
+
+  return (
+    <View style={styles.paginationBar}>
+      {/* Count label */}
+      <Text style={styles.paginationLabel}>
+        {start}–{end} of {totalItems}
+      </Text>
+
+      <View style={styles.paginationControls}>
+        {/* Prev */}
+        <TouchableOpacity
+          onPress={onPrev}
+          disabled={currentPage === 0}
+          style={[styles.pageBtn, currentPage === 0 && styles.pageBtnDisabled]}
+        >
+          <MaterialCommunityIcons name="chevron-left" size={16} color={currentPage === 0 ? "#1e293b" : "#38D926"} />
+        </TouchableOpacity>
+
+        {/* Page numbers */}
+        {pageNumbers.map((pn, idx) =>
+          pn === "..." ? (
+            <Text key={`ellipsis-${idx}`} style={styles.pageBtnEllipsis}>…</Text>
+          ) : (
+            <TouchableOpacity
+              key={pn}
+              onPress={() => onGoTo(pn as number)}
+              style={[styles.pageBtn, pn === currentPage && styles.pageBtnActive]}
+            >
+              <Text style={[styles.pageBtnText, pn === currentPage && styles.pageBtnTextActive]}>
+                {(pn as number) + 1}
+              </Text>
+            </TouchableOpacity>
+          )
+        )}
+
+        {/* Next */}
+        <TouchableOpacity
+          onPress={onNext}
+          disabled={currentPage === totalPages - 1}
+          style={[styles.pageBtn, currentPage === totalPages - 1 && styles.pageBtnDisabled]}
+        >
+          <MaterialCommunityIcons name="chevron-right" size={16} color={currentPage === totalPages - 1 ? "#1e293b" : "#38D926"} />
+        </TouchableOpacity>
+      </View>
+    </View>
+  );
+};
 
 // ─── Filter Modal ─────────────────────────────────────────────────────────────
 
@@ -382,19 +587,29 @@ export const LibraryScreen = ({
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [search, setSearch] = useState("");
-  const [sortKey, setSortKey] = useState<SortKey>("newest");
+  const [sortKey, setSortKey] = useState<SortKey>("recent");
   const [layout, setLayout] = useState<LayoutMode>("grid");
   const [hiddenList, setHiddenList] = useState<string[]>([]);
+  const [recentMap, setRecentMap] = useState<Map<string, RecentEntry>>(new Map());
   const [pickerManga, setPickerManga] = useState<MangaEntry | null>(null);
   const [editingManga, setEditingManga] = useState<MangaEntry | null>(null);
   const [filterVisible, setFilterVisible] = useState(false);
   const [filters, setFilters] = useState<ActiveFilters>(EMPTY_FILTERS);
   const [flatMode, setFlatMode] = useState(false);
 
+  // Pagination
+  const [currentPage, setCurrentPage] = useState(0);
+  const listRef = useRef<FlatList<any>>(null);
+
   const loadData = useCallback(async () => {
-    const [library, hidden] = await Promise.all([readMangaLibrary(), getHiddenMangaList()]);
+    const [library, hidden, recent] = await Promise.all([
+      readMangaLibrary(),
+      getHiddenMangaList(),
+      getRecentlyReadMap(),
+    ]);
     setManga(library);
     setHiddenList(hidden);
+    setRecentMap(recent);
     return library;
   }, []);
 
@@ -416,27 +631,51 @@ export const LibraryScreen = ({
       sources.add(m.source);
     });
     return {
-      allTags: Array.from(tags).sort(),
-      allGenres: Array.from(genres).sort(),
+      allTags:    Array.from(tags).sort(),
+      allGenres:  Array.from(genres).sort(),
       allSources: Array.from(sources).sort(),
     };
   }, [manga]);
 
   const activeFilterCount = filters.tags.length + filters.genres.length + filters.sources.length;
 
+  // Full sorted+filtered list
   const filtered = useMemo(() => {
     let res = hideMode
       ? manga.filter((m) => hiddenList.includes(m.uid))
       : manga.filter((m) => !hiddenList.includes(m.uid));
     res = searchByTitle(res, search);
     res = applyFilters(res, filters);
-    return sortManga(res, sortKey);
-  }, [manga, search, sortKey, hiddenList, hideMode, filters]);
+    return sortManga(res, sortKey, recentMap);
+  }, [manga, search, sortKey, hiddenList, hideMode, filters, recentMap]);
 
   const flatItems = useMemo<FlatItem[]>(() => {
     if (!flatMode) return [];
     return filtered.flatMap((m) => m.chapters.map((ch) => ({ manga: m, chapter: ch })));
   }, [flatMode, filtered]);
+
+  // Pagination derived state
+  const totalItems  = flatMode ? flatItems.length : filtered.length;
+  const totalPages  = Math.max(1, Math.ceil(totalItems / PAGE_SIZE));
+  const safePage    = Math.min(currentPage, totalPages - 1);
+
+  const pagedData = useMemo(() => {
+    const start = safePage * PAGE_SIZE;
+    const end   = start + PAGE_SIZE;
+    return flatMode
+      ? flatItems.slice(start, end)
+      : filtered.slice(start, end);
+  }, [flatMode, flatItems, filtered, safePage]);
+
+  // Reset to page 0 whenever the filtered set changes
+  useEffect(() => {
+    setCurrentPage(0);
+  }, [search, sortKey, filters, flatMode]);
+
+  const goToPage = (p: number) => {
+    setCurrentPage(p);
+    listRef.current?.scrollToOffset({ offset: 0, animated: true });
+  };
 
   const numColumns = layout === "grid" ? 2 : layout === "compact" ? 4 : 1;
 
@@ -454,15 +693,11 @@ export const LibraryScreen = ({
   return (
     <View style={{ flex: 1, backgroundColor: "#030712" }}>
 
-      {/* ══════════════════════════════════════════
-          ROW 1 — Title  +  Layout switcher
-      ══════════════════════════════════════════ */}
+      {/* ══ ROW 1 — Title + Layout switcher ══ */}
       <View style={styles.row1}>
         <Text style={styles.title}>
           Manga <Text style={{ color: "#38D926" }}>Nest</Text>
         </Text>
-
-        {/* Layout switcher */}
         <View style={styles.layoutSwitcher}>
           {(["hero", "list", "grid", "compact"] as LayoutMode[]).map((m) => (
             <TouchableOpacity
@@ -480,9 +715,7 @@ export const LibraryScreen = ({
         </View>
       </View>
 
-      {/* ══════════════════════════════════════════
-          ROW 2 — Search bar (full width)
-      ══════════════════════════════════════════ */}
+      {/* ══ ROW 2 — Search bar ══ */}
       <View style={styles.row2}>
         <View style={styles.searchWrapper}>
           <MaterialCommunityIcons name="magnify" size={16} color="#334155" style={{ marginRight: 8 }} />
@@ -501,12 +734,8 @@ export const LibraryScreen = ({
         </View>
       </View>
 
-      {/* ══════════════════════════════════════════
-          ROW 3 — Sort pills  ···  Refresh  Filter
-      ══════════════════════════════════════════ */}
+      {/* ══ ROW 3 — Sort pills + Refresh + Filter ══ */}
       <View style={styles.row3}>
-        {/* Sort pills — scrollable, takes remaining space.
-            Tapping an active pill flips it to its inverse. */}
         <ScrollView
           horizontal
           showsHorizontalScrollIndicator={false}
@@ -514,26 +743,16 @@ export const LibraryScreen = ({
           contentContainerStyle={{ alignItems: "center", paddingRight: 8 }}
         >
           {SORT_PAIRS.map((pair) => {
-            // Is either side of the pair currently active?
             const isPrimary = sortKey === pair.primary;
             const isInverse = sortKey === pair.inverse && pair.inverse !== pair.primary;
             const active    = isPrimary || isInverse;
-
-            // What to show right now
             const label = isInverse ? pair.inverseLabel : pair.primaryLabel;
             const icon  = isInverse ? pair.inverseIcon  : pair.primaryIcon;
 
             const handlePress = () => {
-              if (!active) {
-                // Not yet active → activate with primary
-                setSortKey(pair.primary);
-              } else if (isPrimary) {
-                // Active on primary → flip to inverse (if different)
-                setSortKey(pair.inverse);
-              } else {
-                // Active on inverse → flip back to primary
-                setSortKey(pair.primary);
-              }
+              if (!active)          setSortKey(pair.primary);
+              else if (isPrimary)   setSortKey(pair.inverse);
+              else                  setSortKey(pair.primary);
             };
 
             return (
@@ -551,7 +770,6 @@ export const LibraryScreen = ({
                 <Text style={[styles.sortChipText, active && styles.sortChipTextActive]}>
                   {label}
                 </Text>
-                {/* Small arrow hint when active so user knows it's tappable */}
                 {active && pair.primary !== pair.inverse && (
                   <MaterialCommunityIcons
                     name={isPrimary ? "chevron-down" : "chevron-up"}
@@ -565,12 +783,10 @@ export const LibraryScreen = ({
           })}
         </ScrollView>
 
-        {/* Refresh */}
         <TouchableOpacity onPress={onRefresh} style={styles.iconBtn}>
           <MaterialCommunityIcons name="refresh" size={19} color="#38D926" />
         </TouchableOpacity>
 
-        {/* Filter — badge shows active count */}
         <TouchableOpacity
           onPress={() => setFilterVisible(true)}
           style={[styles.iconBtn, activeFilterCount > 0 && styles.iconBtnActive]}
@@ -588,16 +804,14 @@ export const LibraryScreen = ({
         </TouchableOpacity>
       </View>
 
-      {/* ══════════════════════════════════════════
-          ROW 4 — Active filter chips  (conditional)
-      ══════════════════════════════════════════ */}
+      {/* ══ ROW 4 — Active filter chips ══ */}
       {activeFilterCount > 0 && (
         <View style={{ paddingHorizontal: 16, paddingBottom: 8 }}>
           <ActiveFilterChips filters={filters} onRemove={removeFilter} />
         </View>
       )}
 
-      {/* Flat mode banner (conditional) */}
+      {/* Flat mode banner */}
       {flatMode && (
         <View style={styles.flatBanner}>
           <MaterialCommunityIcons name="format-list-bulleted-square" size={13} color="#38D926" />
@@ -610,45 +824,67 @@ export const LibraryScreen = ({
         </View>
       )}
 
-      {/* ══════════════════════════════════════════
-          DATA
-      ══════════════════════════════════════════ */}
+      {/* ══ Data ══ */}
       {flatMode ? (
         <FlatList
+          ref={listRef}
           key={`flat-${layout}`}
-          data={flatItems}
+          data={pagedData as FlatItem[]}
           numColumns={numColumns}
-          keyExtractor={(item) => `${item.manga.uid}-${item.chapter.ep}`}
+          keyExtractor={(item: FlatItem) => `${item.manga.uid}-${item.chapter.ep}`}
           columnWrapperStyle={numColumns > 1 ? { justifyContent: "flex-start", gap: 8, paddingHorizontal: 12 } : null}
-          contentContainerStyle={{ paddingTop: 8, paddingBottom: 100 }}
+          contentContainerStyle={{ paddingTop: 8, paddingBottom: 20 }}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#38D926" />}
-          renderItem={({ item }) => (
+          ListFooterComponent={
+            <PaginationBar
+              currentPage={safePage}
+              totalPages={totalPages}
+              onPrev={() => goToPage(safePage - 1)}
+              onNext={() => goToPage(safePage + 1)}
+              onGoTo={goToPage}
+              totalItems={totalItems}
+              pageSize={PAGE_SIZE}
+            />
+          }
+          renderItem={({ item }: { item: FlatItem }) => (
             <TouchableOpacity
               style={{ width: numColumns === 1 ? "100%" : (SCREEN_WIDTH - (numColumns + 1) * 12) / numColumns }}
               onPress={() => onSelectManga(item.manga, item.chapter.ep)}
               onLongPress={() =>
                 Alert.alert("Options", `${item.manga.name} — EP ${item.chapter.ep}`, [
                   { text: "Edit Manga Metadata",  onPress: () => setEditingManga(item.manga) },
-                  { text: "Delete This Chapter",   style: "destructive", onPress: () => onDeleteChapter(item.manga.uid, item.chapter.ep) },
-                  { text: "Delete Entire Manga",   style: "destructive", onPress: () => onDeleteManga(item.manga.uid) },
+                  { text: "Delete This Chapter",  style: "destructive", onPress: () => onDeleteChapter(item.manga.uid, item.chapter.ep) },
+                  { text: "Delete Entire Manga",  style: "destructive", onPress: () => onDeleteManga(item.manga.uid) },
                   { text: "Cancel", style: "cancel" },
                 ])
               }
             >
-              <FlatCard item={item} mode={layout} />
+              <FlatCard item={item} mode={layout} recentEntry={recentMap.get(item.manga.uid)} />
             </TouchableOpacity>
           )}
         />
       ) : (
         <FlatList
+          ref={listRef}
           key={layout}
-          data={filtered}
+          data={pagedData as MangaEntry[]}
           numColumns={numColumns}
-          keyExtractor={(item) => item.uid}
+          keyExtractor={(item: MangaEntry) => item.uid}
           columnWrapperStyle={numColumns > 1 ? { justifyContent: "flex-start", gap: 8, paddingHorizontal: 12 } : null}
-          contentContainerStyle={{ paddingTop: 8, paddingBottom: 100 }}
+          contentContainerStyle={{ paddingTop: 8, paddingBottom: 20 }}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#38D926" />}
-          renderItem={({ item }) => (
+          ListFooterComponent={
+            <PaginationBar
+              currentPage={safePage}
+              totalPages={totalPages}
+              onPrev={() => goToPage(safePage - 1)}
+              onNext={() => goToPage(safePage + 1)}
+              onGoTo={goToPage}
+              totalItems={totalItems}
+              pageSize={PAGE_SIZE}
+            />
+          }
+          renderItem={({ item }: { item: MangaEntry }) => (
             <TouchableOpacity
               style={{ width: numColumns === 1 ? "100%" : (SCREEN_WIDTH - (numColumns + 1) * 12) / numColumns }}
               onPress={() =>
@@ -658,13 +894,13 @@ export const LibraryScreen = ({
               }
               onLongPress={() =>
                 Alert.alert("Options", item.name, [
-                  { text: "Edit Metadata",         onPress: () => setEditingManga(item) },
-                  { text: "Delete Library Entry",  style: "destructive", onPress: () => onDeleteManga(item.uid) },
+                  { text: "Edit Metadata",        onPress: () => setEditingManga(item) },
+                  { text: "Delete Library Entry", style: "destructive", onPress: () => onDeleteManga(item.uid) },
                   { text: "Cancel", style: "cancel" },
                 ])
               }
             >
-              <AdaptiveCard item={item} mode={layout} />
+              <AdaptiveCard item={item} mode={layout} recentEntry={recentMap.get(item.uid)} />
             </TouchableOpacity>
           )}
         />
@@ -696,7 +932,7 @@ export const LibraryScreen = ({
             const freshLibrary = await loadData();
             setPickerManga((prev) => {
               if (!prev) return null;
-              const freshEntry = freshLibrary?.find((m) => m.uid === prev.uid);
+              const freshEntry = freshLibrary?.find((m: MangaEntry) => m.uid === prev.uid);
               if (freshEntry) return freshEntry;
               return {
                 ...prev,
@@ -727,7 +963,6 @@ export const LibraryScreen = ({
 // ─── Styles ───────────────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
-  // ── Header rows ──
   row1: {
     flexDirection: "row",
     alignItems: "center",
@@ -756,7 +991,6 @@ const styles = StyleSheet.create({
   layoutBtnActive: {
     backgroundColor: "#1e293b",
   },
-
   row2: {
     paddingHorizontal: 16,
     paddingBottom: 12,
@@ -777,7 +1011,6 @@ const styles = StyleSheet.create({
     fontSize: 14,
     padding: 0,
   },
-
   row3: {
     flexDirection: "row",
     alignItems: "center",
@@ -832,7 +1065,43 @@ const styles = StyleSheet.create({
   },
   badgeText: { color: "#030712", fontSize: 9, fontWeight: "900" },
 
-  // ── Active filter chips ──
+  // ── Progress badges
+  progressBadge: {
+    backgroundColor: "#38D92618",
+    borderRadius: 6,
+    paddingHorizontal: 6,
+    paddingVertical: 3,
+    borderWidth: 1,
+    borderColor: "#38D92650",
+  },
+  progressBadgeComplete: {
+    backgroundColor: "#38D92640",
+    borderColor: "#38D926",
+  },
+  progressBadgeText: {
+    color: "#38D926",
+    fontSize: 10,
+    fontWeight: "800",
+    fontVariant: ["tabular-nums"],
+  },
+  badgeOverlay: {
+    position: "absolute",
+    bottom: 6,
+    right: 4,
+  },
+  unreadDot: {
+    position: "absolute",
+    top: 6,
+    right: 6,
+    width: 7,
+    height: 7,
+    borderRadius: 4,
+    backgroundColor: "#60a5fa",
+    borderWidth: 1,
+    borderColor: "#030712",
+  },
+
+  // ── Active filter chips
   activeChip: {
     flexDirection: "row",
     alignItems: "center",
@@ -846,7 +1115,7 @@ const styles = StyleSheet.create({
   },
   activeChipText: { color: "#38D926", fontSize: 11, fontWeight: "700" },
 
-  // ── Flat mode banner ──
+  // ── Flat mode banner
   flatBanner: {
     flexDirection: "row",
     alignItems: "center",
@@ -866,7 +1135,7 @@ const styles = StyleSheet.create({
     marginLeft: 6,
   },
 
-  // ── Card tag chips ──
+  // ── Card tag chips
   chip: {
     backgroundColor: "#0a0e17",
     borderRadius: 6,
@@ -878,7 +1147,7 @@ const styles = StyleSheet.create({
   },
   chipText: { color: "#475569", fontSize: 10 },
 
-  // ── Filter sheet ──
+  // ── Filter sheet
   filterSheet: {
     backgroundColor: "#080c12",
     borderTopLeftRadius: 24,
@@ -942,5 +1211,58 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     backgroundColor: "#38D926",
     alignItems: "center",
+  },
+
+  // ── Pagination
+  paginationBar: {
+    paddingHorizontal: 16,
+    paddingVertical: 18,
+    paddingBottom: 90,
+    gap: 12,
+    alignItems: "center",
+  },
+  paginationLabel: {
+    color: "#475569",
+    fontSize: 11,
+    fontWeight: "600",
+  },
+  paginationControls: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    flexWrap: "wrap",
+    justifyContent: "center",
+  },
+  pageBtn: {
+    minWidth: 34,
+    height: 34,
+    borderRadius: 8,
+    backgroundColor: "#0a0e17",
+    borderWidth: 1,
+    borderColor: "#1e293b",
+    justifyContent: "center",
+    alignItems: "center",
+    paddingHorizontal: 6,
+  },
+  pageBtnActive: {
+    backgroundColor: "#38D92618",
+    borderColor: "#38D926",
+  },
+  pageBtnDisabled: {
+    opacity: 0.3,
+  },
+  pageBtnText: {
+    color: "#475569",
+    fontSize: 12,
+    fontWeight: "700",
+  },
+  pageBtnTextActive: {
+    color: "#38D926",
+  },
+  pageBtnEllipsis: {
+    color: "#334155",
+    fontSize: 14,
+    paddingHorizontal: 4,
+    lineHeight: 34,
   },
 });

@@ -27,12 +27,12 @@ export default function TabLayout() {
           title: "Backup",
         }}
       />
-      {/* <Tabs.Screen
-        name="settings"
+      <Tabs.Screen
+        name="checkUpdate"
         options={{
-          title: "Options",
+          title: "Check Update",
         }}
-      /> */}
+      />
     </Tabs>
   );
 }
