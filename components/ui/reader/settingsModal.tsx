@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import {
   Modal,
   View,
@@ -8,13 +8,16 @@ import {
   Switch,
   ScrollView,
   StyleSheet,
+  Alert,
 } from "react-native";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import type { ViewMode } from "./pageViewer";
+import { setTitlePage, clearTitlePage } from "../../../services/reader/libraryService";
 
 interface Props {
   visible: boolean;
   onClose: () => void;
+  // ── reader state ──────────────────────────────────────────────────────────
   mode: ViewMode;
   onModeChange: (m: ViewMode) => void;
   autoPlay: boolean;
@@ -24,6 +27,16 @@ interface Props {
   currentPage: number;
   totalPages: number;
   onJumpToPage: (page: number) => void;
+  // ── title-page feature ────────────────────────────────────────────────────
+  /** uid of the manga currently open */
+  mangaUid: string;
+  /** ep (chapter) currently open */
+  currentEp: string;
+  /**
+   * Called after a title-page is successfully set or cleared so the
+   * parent (LibraryScreen) can refresh cover images.
+   */
+  onTitlePageChanged?: () => void;
 }
 
 const MODES: { key: ViewMode; label: string; icon: string; desc: string }[] = [
@@ -61,8 +74,19 @@ export const SettingsModal = ({
   currentPage,
   totalPages,
   onJumpToPage,
+  mangaUid,
+  currentEp,
+  onTitlePageChanged,
 }: Props) => {
+  console.log(currentEp)
   const [jumpText, setJumpText] = useState("");
+  const [isTitlePage, setIsTitlePage] = useState(false);
+  const [titlePageSaving, setTitlePageSaving] = useState(false);
+
+  // Reset jump input when modal opens
+  useEffect(() => {
+    if (visible) setJumpText("");
+  }, [visible]);
 
   const handleJump = () => {
     const n = parseInt(jumpText, 10);
@@ -76,6 +100,38 @@ export const SettingsModal = ({
   const bumpSpeed = (delta: number) => {
     const next = Math.round((autoPlaySpeed + delta) * 10) / 10;
     onSpeedChange(Math.min(30, Math.max(0.2, next)));
+  };
+
+  // ── Title-page toggle ─────────────────────────────────────────────────────
+
+  const handleTitlePageToggle = async (value: boolean) => {
+    if (titlePageSaving) return;
+    setTitlePageSaving(true);
+    try {
+      if (value) {
+        await setTitlePage(mangaUid, currentEp, currentPage);
+        setIsTitlePage(true);
+        onTitlePageChanged?.();
+        Alert.alert(
+          "Title Page Set",
+          `Page ${currentPage + 1} of EP ${currentEp} is now the cover image.`,
+          [{ text: "OK" }],
+        );
+      } else {
+        await clearTitlePage(mangaUid);
+        setIsTitlePage(false);
+        onTitlePageChanged?.();
+        Alert.alert(
+          "Title Page Cleared",
+          "Cover image reverted to the first page.",
+          [{ text: "OK" }],
+        );
+      }
+    } catch {
+      Alert.alert("Error", "Failed to update title page.");
+    } finally {
+      setTitlePageSaving(false);
+    }
   };
 
   return (
@@ -129,9 +185,7 @@ export const SettingsModal = ({
                   style={[s.modeCard, active && s.modeCardActive]}
                   activeOpacity={0.7}
                 >
-                  <View
-                    style={[s.modeIconWrap, active && s.modeIconWrapActive]}
-                  >
+                  <View style={[s.modeIconWrap, active && s.modeIconWrapActive]}>
                     <MaterialCommunityIcons
                       name={m.icon as any}
                       size={22}
@@ -149,7 +203,7 @@ export const SettingsModal = ({
             })}
           </View>
 
-          {/* ── Tap zones info (horizontal/autoplay only) ─────────────────── */}
+          {/* ── Tap zone hint ─────────────────────────────────────────────── */}
           {(mode === "horizontal" || mode === "autoplay") && (
             <View style={s.tapZoneInfo}>
               <View style={s.tapZoneItem}>
@@ -167,7 +221,7 @@ export const SettingsModal = ({
             </View>
           )}
 
-          {/* ── Autoplay (only when mode = autoplay) ────────────────────── */}
+          {/* ── Autoplay ─────────────────────────────────────────────────── */}
           {mode === "autoplay" && (
             <View style={s.section}>
               <View style={s.rowBetween}>
@@ -181,16 +235,12 @@ export const SettingsModal = ({
               </View>
 
               <View style={s.speedHeader}>
-                <SectionLabel
-                  icon="speedometer-outline"
-                  text="Seconds / page"
-                />
+                <SectionLabel icon="speedometer-outline" text="Seconds / page" />
                 <View style={s.speedBadge}>
                   <Text style={s.speedBadgeText}>{autoPlaySpeed}s</Text>
                 </View>
               </View>
 
-              {/* Presets */}
               <View style={s.presetRow}>
                 {SPEED_PRESETS.map((sp) => {
                   const active = autoPlaySpeed === sp;
@@ -208,23 +258,14 @@ export const SettingsModal = ({
                 })}
               </View>
 
-              {/* Fine-tune */}
               <View style={s.fineTune}>
-                <TouchableOpacity
-                  onPress={() => bumpSpeed(-0.5)}
-                  style={s.fineTuneBtn}
-                >
+                <TouchableOpacity onPress={() => bumpSpeed(-0.5)} style={s.fineTuneBtn}>
                   <MaterialCommunityIcons name="minus" size={20} color="#64748b" />
                 </TouchableOpacity>
                 <View style={s.fineTuneValue}>
-                  <Text style={s.fineTuneValueText}>
-                    {autoPlaySpeed}s per page
-                  </Text>
+                  <Text style={s.fineTuneValueText}>{autoPlaySpeed}s per page</Text>
                 </View>
-                <TouchableOpacity
-                  onPress={() => bumpSpeed(0.5)}
-                  style={s.fineTuneBtn}
-                >
+                <TouchableOpacity onPress={() => bumpSpeed(0.5)} style={s.fineTuneBtn}>
                   <MaterialCommunityIcons name="plus" size={20} color="#64748b" />
                 </TouchableOpacity>
               </View>
@@ -253,7 +294,6 @@ export const SettingsModal = ({
               </TouchableOpacity>
             </View>
 
-            {/* Page progress bar */}
             <View style={s.progressTrack}>
               <View
                 style={[
@@ -266,6 +306,55 @@ export const SettingsModal = ({
               Page {currentPage + 1} of {totalPages}
             </Text>
           </View>
+
+          {/* ── Set as Title Page ─────────────────────────────────────────── */}
+          <View style={s.section}>
+            <SectionLabel icon="image-edit-outline" text="Cover Image" />
+
+            <TouchableOpacity
+              activeOpacity={0.75}
+              onPress={() => handleTitlePageToggle(!isTitlePage)}
+              style={[s.titlePageRow, isTitlePage && s.titlePageRowActive]}
+            >
+              {/* Left side */}
+              <View style={[s.titlePageIconWrap, isTitlePage && s.titlePageIconWrapActive]}>
+                <MaterialCommunityIcons
+                  name="format-title"
+                  size={20}
+                  color={isTitlePage ? "#38D926" : "#334155"}
+                />
+              </View>
+
+              <View style={s.titlePageTextWrap}>
+                <Text style={[s.titlePageLabel, isTitlePage && s.titlePageLabelActive]}>
+                  Set as title page
+                </Text>
+                <Text style={s.titlePageSub}>
+                  {isTitlePage
+                    ? `Page ${currentPage + 1} · EP ${currentEp}`
+                    : `Use page ${currentPage + 1} as the cover`}
+                </Text>
+              </View>
+
+              {/* Checkbox */}
+              <View style={[s.checkbox, isTitlePage && s.checkboxChecked]}>
+                {isTitlePage && (
+                  <MaterialCommunityIcons name="check" size={14} color="#000" />
+                )}
+              </View>
+            </TouchableOpacity>
+
+            {isTitlePage && (
+              <TouchableOpacity
+                onPress={() => handleTitlePageToggle(false)}
+                style={s.clearTitleBtn}
+                activeOpacity={0.7}
+              >
+                <MaterialCommunityIcons name="restore" size={13} color="#475569" />
+                <Text style={s.clearTitleText}>Revert to default cover</Text>
+              </TouchableOpacity>
+            )}
+          </View>
         </ScrollView>
       </View>
     </Modal>
@@ -274,13 +363,7 @@ export const SettingsModal = ({
 
 // ── Small reusable section header ─────────────────────────────────────────────
 
-const SectionLabel = ({
-  icon,
-  text,
-}: {
-  icon: string;
-  text: string;
-}) => (
+const SectionLabel = ({ icon, text }: { icon: string; text: string }) => (
   <View style={s.sectionLabel}>
     <MaterialCommunityIcons name={icon as any} size={14} color="#38D926" />
     <Text style={s.sectionLabelText}>{text}</Text>
@@ -296,7 +379,6 @@ const s = StyleSheet.create({
     borderTopRightRadius: 28,
     borderTopWidth: 1,
     borderColor: "#141c2b",
-    // subtle green glow on top edge
     shadowColor: "#38D926",
     shadowOffset: { width: 0, height: -4 },
     shadowOpacity: 0.08,
@@ -353,7 +435,6 @@ const s = StyleSheet.create({
     gap: 4,
   },
 
-  // ── Section label
   sectionLabel: {
     flexDirection: "row",
     alignItems: "center",
@@ -550,7 +631,6 @@ const s = StyleSheet.create({
     paddingHorizontal: 24,
     justifyContent: "center",
     alignItems: "center",
-    // subtle inner glow
     shadowColor: "#38D926",
     shadowOffset: { width: 0, height: 0 },
     shadowOpacity: 0.4,
@@ -563,7 +643,6 @@ const s = StyleSheet.create({
     fontSize: 14,
   },
 
-  // ── Progress
   progressTrack: {
     height: 3,
     backgroundColor: "#141c2b",
@@ -581,5 +660,84 @@ const s = StyleSheet.create({
     fontSize: 11,
     fontWeight: "600",
     textAlign: "center",
+  },
+
+  // ── Title page row
+  titlePageRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#0d1420",
+    borderRadius: 14,
+    padding: 14,
+    gap: 12,
+    borderWidth: 1,
+    borderColor: "#141c2b",
+  },
+  titlePageRowActive: {
+    backgroundColor: "#38D92610",
+    borderColor: "#38D926",
+  },
+  titlePageIconWrap: {
+    width: 40,
+    height: 40,
+    borderRadius: 10,
+    backgroundColor: "#141c2b",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  titlePageIconWrapActive: {
+    backgroundColor: "#38D92620",
+  },
+  titlePageTextWrap: {
+    flex: 1,
+  },
+  titlePageLabel: {
+    color: "#475569",
+    fontSize: 13,
+    fontWeight: "800",
+  },
+  titlePageLabelActive: {
+    color: "#38D926",
+  },
+  titlePageSub: {
+    color: "#334155",
+    fontSize: 10,
+    marginTop: 2,
+  },
+
+  // ── Checkbox
+  checkbox: {
+    width: 22,
+    height: 22,
+    borderRadius: 6,
+    borderWidth: 2,
+    borderColor: "#334155",
+    backgroundColor: "transparent",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  checkboxChecked: {
+    backgroundColor: "#38D926",
+    borderColor: "#38D926",
+  },
+
+  // ── Clear title button
+  clearTitleBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    marginTop: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 9,
+    borderRadius: 10,
+    backgroundColor: "#0d1420",
+    borderWidth: 1,
+    borderColor: "#1e293b",
+    alignSelf: "flex-start",
+  },
+  clearTitleText: {
+    color: "#475569",
+    fontSize: 11,
+    fontWeight: "700",
   },
 });

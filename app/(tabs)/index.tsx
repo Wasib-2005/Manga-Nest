@@ -1,10 +1,5 @@
 import React, { useState, useRef, useCallback } from "react";
-import {
-  View,
-  StatusBar,
-  BackHandler,
-  Alert,
-} from "react-native";
+import { View, StatusBar, BackHandler, Alert } from "react-native";
 import { LibraryScreen } from "../../components/ui/reader/libraryScreen";
 import { ReaderScreen } from "../../components/ui/reader/readerScreen";
 import { HiddenMangaModal } from "../../components/ui/reader/hiddenMangaModal";
@@ -17,7 +12,10 @@ import {
   getReadingProgress,
   saveReadingProgress,
 } from "../../services/reader/readingProgressService";
-import { deleteChapterFiles, deleteFullManga } from "../../services/reader/deleteManga";
+import {
+  deleteChapterFiles,
+  deleteFullManga,
+} from "../../services/reader/deleteManga";
 import { TouchableOpacity } from "react-native";
 import { useEffect } from "react";
 import type { ViewMode } from "../../components/ui/reader/pageViewer";
@@ -28,6 +26,7 @@ export default function Index() {
   const [screen, setScreen] = useState<Screen>("library");
   const [selectedManga, setSelectedManga] = useState<MangaEntry | null>(null);
   const [selectedChapter, setSelectedChapter] = useState("");
+  console.log("asdadfghfdhjdrtyyje",selectedChapter);
   const [pages, setPages] = useState<string[]>([]);
   const [initialPage, setInitialPage] = useState(0);
   const [currentPage, setCurrentPage] = useState(0);
@@ -54,43 +53,52 @@ export default function Index() {
   };
 
   // ── Open a chapter ────────────────────────────────────────────────────────
-  const handleSelectManga = useCallback(async (manga: MangaEntry, chapter: string) => {
-    try {
-      const [chapterPages, lastPage] = await Promise.all([
-        getChapterPages(manga.uid, chapter),
-        getReadingProgress(manga.uid, chapter),
-      ]);
+  const handleSelectManga = useCallback(
+    async (manga: MangaEntry, chapter: string) => {
+      try {
+        const [chapterPages, lastPage] = await Promise.all([
+          getChapterPages(manga.uid, chapter),
+          getReadingProgress(manga.uid, chapter),
+        ]);
 
-      const startPage = Math.min(lastPage, Math.max(0, chapterPages.length - 1));
+        const startPage = Math.min(
+          lastPage,
+          Math.max(0, chapterPages.length - 1),
+        );
 
-      setSelectedManga(manga);
-      setSelectedChapter(chapter);
-      setPages(chapterPages);
-      setInitialPage(startPage);
-      setCurrentPage(startPage);
-      currentPageRef.current = startPage;
-      setAutoPlay(false);
-      setScreen("reader");
-    } catch (err) {
-      Alert.alert("Error", "Failed to load chapter");
-      console.error(err);
-    }
-  }, []);
+        setSelectedManga(manga);
+        setSelectedChapter(chapter);
+        setPages(chapterPages);
+        setInitialPage(startPage);
+        setCurrentPage(startPage);
+        currentPageRef.current = startPage;
+        setAutoPlay(false);
+        setScreen("reader");
+      } catch (err) {
+        Alert.alert("Error", "Failed to load chapter");
+        console.error(err);
+      }
+    },
+    [],
+  );
 
   // ── Save progress on every page turn ─────────────────────────────────────
-  const handlePageChange = useCallback((page: number) => {
-    currentPageRef.current = page;
-    setCurrentPage(page);
+  const handlePageChange = useCallback(
+    (page: number) => {
+      currentPageRef.current = page;
+      setCurrentPage(page);
 
-    if (selectedManga && selectedChapter) {
-      saveReadingProgress(
-        selectedManga.uid,
-        selectedChapter,
-        page,
-        pages.length
-      );
-    }
-  }, [selectedManga, selectedChapter, pages.length]);
+      if (selectedManga && selectedChapter) {
+        saveReadingProgress(
+          selectedManga.uid,
+          selectedChapter,
+          page,
+          pages.length,
+        );
+      }
+    },
+    [selectedManga, selectedChapter, pages.length],
+  );
 
   // ── Back from reader → stay on library exactly where it was ──────────────
   const handleBack = useCallback(() => {
@@ -100,7 +108,7 @@ export default function Index() {
         selectedManga.uid,
         selectedChapter,
         currentPageRef.current,
-        pages.length
+        pages.length,
       );
     }
     // Just hide the reader — do NOT remount LibraryScreen
@@ -112,43 +120,52 @@ export default function Index() {
   }, [selectedManga, selectedChapter, pages.length]);
 
   // ── Deletion (these DO need a library refresh) ────────────────────────────
-  const onDeleteChapter = useCallback(async (uid: string, ep: string) => {
-    try {
-      const wasFullMangaDeleted = await deleteChapterFiles(uid, ep);
-      if (wasFullMangaDeleted && selectedManga?.uid === uid) {
-        setScreen("library");
-        setSelectedManga(null);
+  const onDeleteChapter = useCallback(
+    async (uid: string, ep: string) => {
+      try {
+        const wasFullMangaDeleted = await deleteChapterFiles(uid, ep);
+        if (wasFullMangaDeleted && selectedManga?.uid === uid) {
+          setScreen("library");
+          setSelectedManga(null);
+        }
+        setLibraryRefreshKey((prev) => prev + 1);
+      } catch {
+        Alert.alert("Error", "Failed to delete chapter");
       }
-      setLibraryRefreshKey((prev) => prev + 1);
-    } catch {
-      Alert.alert("Error", "Failed to delete chapter");
-    }
-  }, [selectedManga]);
+    },
+    [selectedManga],
+  );
 
-  const onDeleteManga = useCallback(async (uid: string) => {
-    try {
-      await deleteFullManga(uid);
-      if (selectedManga?.uid === uid) {
-        setScreen("library");
-        setSelectedManga(null);
+  const onDeleteManga = useCallback(
+    async (uid: string) => {
+      try {
+        await deleteFullManga(uid);
+        if (selectedManga?.uid === uid) {
+          setScreen("library");
+          setSelectedManga(null);
+        }
+        setLibraryRefreshKey((prev) => prev + 1);
+      } catch {
+        Alert.alert("Error", "Failed to delete manga from library");
       }
-      setLibraryRefreshKey((prev) => prev + 1);
-    } catch {
-      Alert.alert("Error", "Failed to delete manga from library");
-    }
-  }, [selectedManga]);
+    },
+    [selectedManga],
+  );
 
-  const onRenameChapter = useCallback(async (uid: string, oldEp: string, newEp: string) => {
-    try {
-      await renameChapterEp(uid, oldEp, newEp);
-      if (selectedManga?.uid === uid && selectedChapter === oldEp) {
-        setSelectedChapter(newEp);
+  const onRenameChapter = useCallback(
+    async (uid: string, oldEp: string, newEp: string) => {
+      try {
+        await renameChapterEp(uid, oldEp, newEp);
+        if (selectedManga?.uid === uid && selectedChapter === oldEp) {
+          setSelectedChapter(newEp);
+        }
+        setLibraryRefreshKey((prev) => prev + 1);
+      } catch {
+        Alert.alert("Error", "Failed to rename chapter");
       }
-      setLibraryRefreshKey((prev) => prev + 1);
-    } catch {
-      Alert.alert("Error", "Failed to rename chapter");
-    }
-  }, [selectedManga, selectedChapter]);
+    },
+    [selectedManga, selectedChapter],
+  );
 
   // ── Hardware back button ──────────────────────────────────────────────────
   useEffect(() => {
@@ -166,7 +183,9 @@ export default function Index() {
   return (
     <View style={{ flex: 1 }}>
       {/* ── Library (always mounted, just hidden when reading) ── */}
-      <View style={{ flex: 1, display: screen === "library" ? "flex" : "none" }}>
+      <View
+        style={{ flex: 1, display: screen === "library" ? "flex" : "none" }}
+      >
         <StatusBar barStyle="light-content" backgroundColor="#030712" />
         <LibraryScreen
           key={libraryRefreshKey}
@@ -180,7 +199,13 @@ export default function Index() {
         <TouchableOpacity
           activeOpacity={1}
           onPress={handleNestTap}
-          style={{ position: "absolute", top: 0, left: 0, right: 0, height: 48 }}
+          style={{
+            position: "absolute",
+            top: 0,
+            left: 0,
+            right: 0,
+            height: 48,
+          }}
         />
         <HiddenMangaModal
           visible={hideVisible}
@@ -193,7 +218,9 @@ export default function Index() {
         <>
           <StatusBar hidden />
           <ReaderScreen
+          currentEp={selectedChapter}
             pages={pages}
+            mangaUid={selectedManga?.uid ?? " "}
             initialPage={initialPage}
             mangaName={selectedManga?.name ?? ""}
             chapterLabel={`EP ${selectedChapter}`}
@@ -208,6 +235,7 @@ export default function Index() {
             onSpeedChange={setAutoPlaySpeed}
             onClose={handleBack}
             onPageChange={handlePageChange}
+            
           />
           <HiddenMangaModal
             visible={hideVisible}

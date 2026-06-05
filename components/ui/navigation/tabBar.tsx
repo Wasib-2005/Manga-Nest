@@ -15,7 +15,7 @@ export const CustomTabBar = ({
   // Checks if an update is ready based on either string state or explicit boolean flag
   const hasUpdate = status === "update_available" || isUpdateAvailable === true;
 
-  console.log("TabBar Rendered - Update Available:", hasUpdate);
+  // console.log("TabBar Rendered - Update Available:", hasUpdate);
 
   return (
     <View

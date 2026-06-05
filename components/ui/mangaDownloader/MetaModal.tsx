@@ -45,15 +45,15 @@ function useCoverImage(meta: MangaMeta | null): string | null {
     let cancelled = false;
 
     (async () => {
-      console.log(
-        meta.scanUrl,
-        "doesn't have direct image URLs, attempting to scrape cover from page…",
-      );
+      // console.log(
+      //   meta.scanUrl,
+      //   "doesn't have direct image URLs, attempting to scrape cover from page…",
+      // );
       try {
         const res = await fetch(meta.scanUrl, {
           headers: { "User-Agent": "Mozilla/5.0" },
         });
-        console.log("Page fetch status:", res);
+        // console.log("Page fetch status:", res);
 
         if (typeof res === "object" && "status" in res && res.status <= 300) {
           return setUri(res.url);
@@ -61,12 +61,12 @@ function useCoverImage(meta: MangaMeta | null): string | null {
 
         const html = await res.text();
 
-        console.log("Fetched HTML length:", html);
+        // console.log("Fetched HTML length:", html);
         // html is a object then
 
         // og:image
         const og = html.match(/og:image[^>]*content="([^"]+)"/);
-        console.log("OG image found:", og && og[1]);
+        // console.log("OG image found:", og && og[1]);
         // first <img src>
         const img = html.match(
           /<img[^>]+src="(https?:\/\/[^"]+\.(jpg|jpeg|png|webp)[^"]*)"/i,
@@ -84,7 +84,7 @@ function useCoverImage(meta: MangaMeta | null): string | null {
         }
       } catch {
         // silently ignore
-        console.log("Failed to fetch or parse page for cover image.");
+        // console.log("Failed to fetch or parse page for cover image.");
       }
     })();
 
@@ -191,8 +191,6 @@ export const MetaModal = ({
   const [touched, setTouched] = useState(false);
   const shakeAnim = useRef(new Animated.Value(0)).current;
 
-
-
   const coverUri = useCoverImage(meta);
 
   const [imgLoading, setImgLoading] = useState(true);
@@ -216,7 +214,7 @@ export const MetaModal = ({
   // Auto-download trigger
   useEffect(() => {
     if (autoDownload && canGo && phase === "review") onDownload();
-  }, [edited.name, edited.ep, autoDownload,onDownload, canGo, phase]);
+  }, [edited.name, edited.ep, autoDownload, onDownload, canGo, phase]);
 
   const shake = useCallback(() => {
     Animated.sequence([
@@ -615,10 +613,10 @@ const s = StyleSheet.create({
     overflow: "hidden",
   },
   coverImg: {
-  height: "100%",
-  width: "100%",
-  objectFit: "contain",
-},
+    height: "100%",
+    width: "100%",
+    objectFit: "contain",
+  },
   coverPlaceholder: {
     position: "absolute",
     inset: 0,

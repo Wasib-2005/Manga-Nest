@@ -32,6 +32,8 @@ interface Props {
   chapterLabel: string;
   onClose: () => void;
   onPageChange?: (page: number) => void;
+  mangaUid: string;
+  currentEp: any;
 }
 
 const AUTO_HIDE_DELAY = 3000;
@@ -39,7 +41,7 @@ const AUTO_HIDE_DELAY = 3000;
 // ── Page Box Progress Bar ─────────────────────────────────────────────────────
 
 const PAGE_BOX_MAX = 40;
-const DOT_MAX      = 120;
+const DOT_MAX = 120;
 
 const PageBoxBar = ({ current, total }: { current: number; total: number }) => {
   if (total <= 0) return null;
@@ -58,7 +60,7 @@ const PageBoxBar = ({ current, total }: { current: number; total: number }) => {
 
   // Segment mode for medium-length manga
   if (total > PAGE_BOX_MAX) {
-    const SEG     = 20;
+    const SEG = 20;
     const segSize = total / SEG;
     const litSegs = Math.round(read / segSize);
     return (
@@ -68,7 +70,11 @@ const PageBoxBar = ({ current, total }: { current: number; total: number }) => {
           {Array.from({ length: SEG }).map((_, i) => (
             <View
               key={i}
-              style={[pb.seg, i < litSegs && pb.segLit, i === litSegs - 1 && pb.segCurrent]}
+              style={[
+                pb.seg,
+                i < litSegs && pb.segLit,
+                i === litSegs - 1 && pb.segCurrent,
+              ]}
             />
           ))}
         </View>
@@ -85,7 +91,11 @@ const PageBoxBar = ({ current, total }: { current: number; total: number }) => {
         {Array.from({ length: total }).map((_, i) => (
           <View
             key={i}
-            style={[pb.box, i < read && pb.boxLit, i === current && pb.boxCurrent]}
+            style={[
+              pb.box,
+              i < read && pb.boxLit,
+              i === current && pb.boxCurrent,
+            ]}
           />
         ))}
       </View>
@@ -163,8 +173,16 @@ const pb = StyleSheet.create({
     paddingVertical: 4,
   },
   numericCurrent: { color: "#38D926", fontSize: 20, fontWeight: "900" },
-  numericSep:     { color: "rgba(255,255,255,0.3)", fontSize: 14, fontWeight: "600" },
-  numericTotal:   { color: "rgba(255,255,255,0.4)", fontSize: 14, fontWeight: "600" },
+  numericSep: {
+    color: "rgba(255,255,255,0.3)",
+    fontSize: 14,
+    fontWeight: "600",
+  },
+  numericTotal: {
+    color: "rgba(255,255,255,0.4)",
+    fontSize: 14,
+    fontWeight: "600",
+  },
 });
 
 // ── ReaderScreen ──────────────────────────────────────────────────────────────
@@ -179,11 +197,13 @@ export const ReaderScreen = ({
   autoPlaySpeed,
   onSpeedChange,
   mangaName,
-  chapterLabel,
   onClose,
   onPageChange,
+  mangaUid,
+  currentEp,
+  chapterLabel
 }: Props) => {
-  const insets         = useSafeAreaInsets();
+  const insets = useSafeAreaInsets();
   const [currentPage, setCurrentPage] = useState(initialPage);
   const [settingsVisible, setSettingsVisible] = useState(false);
 
@@ -201,7 +221,7 @@ export const ReaderScreen = ({
   const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const overlayStyle = useAnimatedStyle(() => ({
-    opacity:       withTiming(uiVisible.value, { duration: 250 }),
+    opacity: withTiming(uiVisible.value, { duration: 250 }),
     pointerEvents: uiVisible.value > 0.5 ? "auto" : "none",
   }));
 
@@ -231,22 +251,30 @@ export const ReaderScreen = ({
 
   useEffect(() => {
     showUI();
-    return () => { if (hideTimer.current) clearTimeout(hideTimer.current); };
+    return () => {
+      if (hideTimer.current) clearTimeout(hideTimer.current);
+    };
   }, []);
 
-  const handlePageChange = useCallback((idx: number) => {
-    setCurrentPage(idx);
-    onPageChange?.(idx);
-  }, [onPageChange]);
+  const handlePageChange = useCallback(
+    (idx: number) => {
+      setCurrentPage(idx);
+      onPageChange?.(idx);
+    },
+    [onPageChange],
+  );
 
   // ── This is the key fix: call the imperative jump on the viewer ──────────
-  const handleJumpToPage = useCallback((pageIndex: number) => {
-    const clamped = Math.max(0, Math.min(pageIndex, pages.length - 1));
-    viewerRef.current?.jumpToPage(clamped);
-    setCurrentPage(clamped);
-    onPageChange?.(clamped);
-    setSettingsVisible(false);
-  }, [pages.length, onPageChange]);
+  const handleJumpToPage = useCallback(
+    (pageIndex: number) => {
+      const clamped = Math.max(0, Math.min(pageIndex, pages.length - 1));
+      viewerRef.current?.jumpToPage(clamped);
+      setCurrentPage(clamped);
+      onPageChange?.(clamped);
+      setSettingsVisible(false);
+    },
+    [pages.length, onPageChange],
+  );
 
   return (
     <View style={styles.root}>
@@ -278,12 +306,21 @@ export const ReaderScreen = ({
         </TouchableOpacity>
 
         <View style={styles.titleBlock}>
-          <Text style={styles.mangaName} numberOfLines={1}>{mangaName}</Text>
+          <Text style={styles.mangaName} numberOfLines={1}>
+            {mangaName}
+          </Text>
           <Text style={styles.chapterLabel}>{chapterLabel}</Text>
         </View>
-
-        <TouchableOpacity onPress={() => setSettingsVisible(true)} style={styles.iconBtn}>
-          <MaterialCommunityIcons name="tune-variant" size={20} color="#f1f5f9" />
+ 
+        <TouchableOpacity
+          onPress={() => setSettingsVisible(true)}
+          style={styles.iconBtn}
+        >
+          <MaterialCommunityIcons
+            name="tune-variant"
+            size={20}
+            color="#f1f5f9"
+          />
         </TouchableOpacity>
       </Animated.View>
 
@@ -298,7 +335,6 @@ export const ReaderScreen = ({
       >
         <PageBoxBar current={currentPage} total={pages.length} />
       </Animated.View>
-
       {/* ── Settings modal ── */}
       <SettingsModal
         visible={settingsVisible}
@@ -312,6 +348,8 @@ export const ReaderScreen = ({
         currentPage={currentPage}
         totalPages={pages.length}
         onJumpToPage={handleJumpToPage}
+        mangaUid={mangaUid}
+        currentEp={currentEp}
       />
     </View>
   );
@@ -321,7 +359,9 @@ const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: "#000" },
   header: {
     position: "absolute",
-    top: 0, left: 0, right: 0,
+    top: 0,
+    left: 0,
+    right: 0,
     flexDirection: "row",
     alignItems: "center",
     paddingHorizontal: 16,
@@ -357,7 +397,9 @@ const styles = StyleSheet.create({
   },
   footer: {
     position: "absolute",
-    bottom: 0, left: 0, right: 0,
+    bottom: 0,
+    left: 0,
+    right: 0,
     paddingHorizontal: 16,
     paddingTop: 14,
     backgroundColor: "rgba(0,0,0,0.72)",

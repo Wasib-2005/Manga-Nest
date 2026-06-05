@@ -4,7 +4,7 @@ export interface MangaMeta {
   tags:      string[];
   genres:    string[];
   ep:        string;
-  source:    "nhentai" | "mangadex" | "sequential" | "hentaicity";
+  source:    "nhentai" | "mangadex" | "sequential" | "hentaicity" | "hentaiera";
   imageUrls: string[];
   /** Sequential only — original image URL used to scan during download */
   scanUrl?:  string;
