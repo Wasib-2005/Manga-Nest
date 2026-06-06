@@ -1,7 +1,8 @@
 import React, { useRef, useEffect } from "react";
 import {
-  View, Text, ScrollView, ActivityIndicator, StyleSheet,
+  View, Text, ScrollView, ActivityIndicator, StyleSheet,Platform
 } from "react-native";
+
 
 interface Props {
   logs:     string[];
@@ -9,6 +10,7 @@ interface Props {
 }
 
 export const LogConsole = ({ logs, loading }: Props) => {
+  console.log(logs)
   const scrollRef = useRef<ScrollView>(null);
 
   useEffect(() => {
@@ -86,5 +88,4 @@ const s = StyleSheet.create({
   },
 });
 
-// Need Platform import
-import { Platform } from "react-native";
+ 

@@ -7,9 +7,8 @@ import {
   StatusBar,
 } from "react-native";
 import { Directory, File, Paths } from "expo-file-system";
-import * as FileSystem from "expo-file-system";
-import * as Clipboard from "expo-clipboard";
 import { ProgressBar } from "../../components/ui/mangaDownloader/ProgressBar";
+import { LogConsole } from "../../components/ui/mangaDownloader/LogConsole";
 
 const MANGA_PATH = "manga";
 
@@ -33,10 +32,8 @@ export default function BackupRestore() {
   const [restoreDir, setRestoreDir] = useState<Directory | null>(null);
 
   const [logs, setLogs] = useState<string[]>([]);
-  const [copied, setCopied] = useState(false);
 
   const cancelRef = useRef(false);
-  const scrollRef = useRef<ScrollView>(null);
 
   const isBusy = backup.status === "running" || restore.status === "running";
 
@@ -60,13 +57,6 @@ export default function BackupRestore() {
 
   const isDir = (item: any): item is Directory =>
     item instanceof Directory || typeof item?.list === "function";
-
-  const handleCopyLogs = async () => {
-    if (!logs.length) return;
-    await Clipboard.setStringAsync(logs.join("\n"));
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
 
   // ── Folder pickers ────────────────────────────────────────────────────────
 
@@ -235,10 +225,8 @@ export default function BackupRestore() {
         if (cancelRef.current) throw new Error("CANCELLED");
         const item = items[i];
 
-        // console.log("Restoring item:", item.name, "isDir?", isDir(item));
         if (item.name === ".nomedia") continue;
 
-        
         setRestore({
           status: "running",
           current: i + 1,
@@ -470,140 +458,8 @@ export default function BackupRestore() {
             showWarning
           />
 
-          {/* ── TERMINAL ── */}
-          <View
-            style={{
-              borderRadius: 20,
-              borderWidth: 1,
-              borderColor: "#0d1117",
-              backgroundColor: "#020810",
-              overflow: "hidden",
-              marginBottom: 8,
-            }}
-          >
-            {/* Top bar */}
-            <View
-              style={{
-                backgroundColor: "#06091a",
-                paddingVertical: 11,
-                paddingHorizontal: 16,
-                flexDirection: "row",
-                justifyContent: "space-between",
-                alignItems: "center",
-                borderBottomWidth: 1,
-                borderBottomColor: "#0d1530",
-              }}
-            >
-              <View
-                style={{ flexDirection: "row", alignItems: "center", gap: 10 }}
-              >
-                <View style={{ flexDirection: "row", gap: 5, marginRight: 4 }}>
-                  {["#ef4444", "#f59e0b", "#22c55e"].map((c) => (
-                    <View
-                      key={c}
-                      style={{
-                        width: 9,
-                        height: 9,
-                        borderRadius: 5,
-                        backgroundColor: c,
-                        opacity: 0.7,
-                      }}
-                    />
-                  ))}
-                </View>
-                <Text
-                  style={{
-                    fontSize: 9,
-                    fontWeight: "700",
-                    color: "#1a3050",
-                    letterSpacing: 2.5,
-                    textTransform: "uppercase",
-                  }}
-                >
-                  System Log · {logs.length} lines
-                </Text>
-              </View>
-              {logs.length > 0 && (
-                <TouchableOpacity
-                  onPress={handleCopyLogs}
-                  style={{
-                    flexDirection: "row",
-                    alignItems: "center",
-                    gap: 5,
-                    backgroundColor: copied ? "#071209" : "#080e20",
-                    borderWidth: 1,
-                    borderColor: copied ? "#0f2a18" : "#0f1f35",
-                    borderRadius: 7,
-                    paddingHorizontal: 10,
-                    paddingVertical: 5,
-                  }}
-                >
-                  <Text
-                    style={{
-                      fontSize: 9,
-                      fontWeight: "800",
-                      color: copied ? "#38D926" : "#2a3f5f",
-                      letterSpacing: 1,
-                    }}
-                  >
-                    {copied ? "✓ COPIED" : "⎘ COPY"}
-                  </Text>
-                </TouchableOpacity>
-              )}
-            </View>
-
-            {/* Log body */}
-            <View style={{ padding: 14 }}>
-              <ScrollView
-                ref={scrollRef}
-                onContentSizeChange={() =>
-                  scrollRef.current?.scrollToEnd({ animated: true })
-                }
-                showsVerticalScrollIndicator
-                style={{ height: 220 }}
-              >
-                {logs.length === 0 ? (
-                  <Text
-                    style={{
-                      fontSize: 12,
-                      fontFamily: "monospace",
-                      color: "#141e30",
-                      fontStyle: "italic",
-                    }}
-                  >
-                    $ awaiting command...
-                  </Text>
-                ) : (
-                  logs.map((line, i) => {
-                    const color =
-                      line.includes("❌") || line.includes("Error")
-                        ? "#f87171"
-                        : line.includes("⚠️")
-                          ? "#fbbf24"
-                          : line.includes("✓") || line.includes("🎉")
-                            ? "#4ade80"
-                            : line.startsWith("─")
-                              ? "#1a2a3a"
-                              : "#3d5068";
-                    return (
-                      <Text
-                        key={i}
-                        style={{
-                          fontSize: 11,
-                          fontFamily: "monospace",
-                          color,
-                          marginBottom: 3,
-                          lineHeight: 17,
-                        }}
-                      >
-                        {line}
-                      </Text>
-                    );
-                  })
-                )}
-              </ScrollView>
-            </View>
-          </View>
+          {/* ── CONSOLE ── */}
+          <LogConsole logs={logs} loading={isBusy} />
         </View>
       </ScrollView>
     </View>

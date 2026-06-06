@@ -348,3 +348,4 @@ export const scrapeNhentai = async (url: string): Promise<MangaMeta> => {
 
   return { name, author, tags, genres, ep: galleryId, source: "nhentai", imageUrls };
 };
+

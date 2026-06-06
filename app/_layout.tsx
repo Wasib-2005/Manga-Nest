@@ -11,9 +11,9 @@ import "../global.css";
 
 import { useColorScheme } from "@/hooks/use-color-scheme";
 import { CheckUpdateProvider } from "@/services/checkUpdates/checkUpdateContextProvider";
-import { Text, View } from "react-native";
-import { CheckUpdateContext } from "@/services/checkUpdates/checkUpdateContext";
-import { useContext } from "react";
+import * as FileSystem from 'expo-file-system';
+import { useEffect } from 'react';
+
 
 export const unstable_settings = {
   anchor: "(tabs)",

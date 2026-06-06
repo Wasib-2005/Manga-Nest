@@ -2,7 +2,7 @@
   "expo": {
     "name": "Manga Nest",
     "slug": "Manga-Nest",
-    "version": "1.0.3",
+    "version": "1.0.4",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "manganest",
@@ -46,7 +46,8 @@
         }
       ],
       "expo-font",
-      "expo-web-browser"
+      "expo-web-browser",
+      "expo-image"
     ],
     "experiments": {
       "typedRoutes": true,
