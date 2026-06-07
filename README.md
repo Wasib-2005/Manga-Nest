@@ -25,7 +25,7 @@
 
 | Feature | Description |
 |---|---|
-| 📥 **Sequential Downloads** | Automatically grab entire series or consecutive chapters |
+| 📥 **Sequential Downloads** | Automatically grab entire ep |
 | 🦊 **MangaDex Support** | Native built-in scraper for MangaDex chapter URLs |
 | 🌐 **Generic Image Scraper** | Works with any site serving images via sequential URLs |
 | 🔄 **Backup & Restore** | Export your library and restore it anytime or on a new device |
