@@ -8,6 +8,7 @@ interface CheckUpdateContextType {
   error: string | null;
   checkForUpdates: () => Promise<void>; // Function to trigger update check
   isUpdateAvailable: boolean | true;
+  status?: string;
 }
 
 // Initialize with a proper default object
@@ -18,4 +19,5 @@ export const CheckUpdateContext = createContext<CheckUpdateContextType>({
   error: null,
   checkForUpdates: async () => {},
   isUpdateAvailable: true,
+  status: ""
 });

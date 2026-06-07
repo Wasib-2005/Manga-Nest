@@ -7,6 +7,24 @@ interface ProviderProps {
 
 const currentVersionEnv = process.env.EXPO_PUBLIC_APP_VERSION || "0.0.1";
 
+// Helper function to safely compare Semantic Versions (e.g., "1.0.4" vs "1.0.3")
+// Returns 1 if v1 > v2, -1 if v1 < v2, and 0 if they are equal
+const compareVersions = (v1: string, v2: string) => {
+  const parts1 = v1.replace(/^v/, "").split(".").map(Number);
+  const parts2 = v2.replace(/^v/, "").split(".").map(Number);
+
+  const maxLength = Math.max(parts1.length, parts2.length);
+  
+  for (let i = 0; i < maxLength; i++) {
+    const num1 = parts1[i] || 0; // default to 0 if undefined (e.g., "1.0" vs "1.0.1")
+    const num2 = parts2[i] || 0;
+    
+    if (num1 > num2) return 1;
+    if (num1 < num2) return -1;
+  }
+  return 0;
+};
+
 export const CheckUpdateProvider = ({ children }: ProviderProps) => {
   const [isChecking, setIsChecking] = useState(false);
   const [latestVersion, setLatestVersion] = useState<string>("0.0.1");
@@ -16,10 +34,11 @@ export const CheckUpdateProvider = ({ children }: ProviderProps) => {
   const checkForUpdates = async () => {
     setIsChecking(true);
     setError(null);
+
     try {
       // Fetch the latest release metadata from GitHub's public API
       const response = await fetch(
-        "https://api.github.com/repos/Wasib-2005/Manga-Nest/releases/latest",
+        "https://api.github.com/repos/Wasib-2005/Manga-Nest/releases/latest"
       );
 
       if (!response.ok) {
@@ -28,20 +47,16 @@ export const CheckUpdateProvider = ({ children }: ProviderProps) => {
 
       const data = await response.json();
 
-      // GitHub returns the release version string in the "tag_name" field (e.g., "v1.2.3" or "1.2.3")
       if (data && data.tag_name) {
-        // Optional: Clean up 'v' prefix if your git tags use "v1.0.0" but app uses "1.0.0"
-        const cleanedVersion = data.tag_name.startsWith("v")
-          ? data.tag_name.slice(1)
-          : data.tag_name;
-        setLatestVersion(cleanedVersion);
-        const isNewer =
-          data.tag_name
-            .replace(/^v/, "")
-            .localeCompare(currentVersionEnv.replace(/^v/, ""), undefined, {
-              numeric: true,
-              sensitivity: "base",
-            }) > 0;
+        // Clean up 'v' prefixes
+        const cleanedLatest = data.tag_name.replace(/^v/, "");
+        const cleanedCurrent = currentVersionEnv.replace(/^v/, "");
+
+        setLatestVersion(cleanedLatest);
+
+        // Use our custom compare function instead of localeCompare
+        const isNewer = compareVersions(cleanedLatest, cleanedCurrent) > 0;
+
         setIsUpdateAvailable(isNewer);
       } else {
         throw new Error("No release tags found.");
@@ -55,16 +70,12 @@ export const CheckUpdateProvider = ({ children }: ProviderProps) => {
   };
 
   console.log(
-    "CheckUpdateProvider Rendered - Current Version:",
+    "CheckUpdateProvider Rendered - Current:",
     currentVersionEnv,
-    "Latest Version:",
+    "Latest:",
     latestVersion,
-    "Is Checking:",
-    isChecking,
-    "Error:",
-    error,
-    "Is Update Available:",
-    isUpdateAvailable,
+    "Update Available:",
+    isUpdateAvailable
   );
 
   useEffect(() => {
@@ -78,8 +89,8 @@ export const CheckUpdateProvider = ({ children }: ProviderProps) => {
         latestVersion,
         error,
         currentVersion: currentVersionEnv,
-        checkForUpdates, // Pass the function down so components can re-trigger it
-        isUpdateAvailable: isUpdateAvailable,
+        checkForUpdates,
+        isUpdateAvailable,
       }}
     >
       {children}
