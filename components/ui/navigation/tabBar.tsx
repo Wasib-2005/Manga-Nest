@@ -39,13 +39,13 @@ const AnimatedTabIcon = ({
   React.useEffect(() => {
     if (trigger === 0) return;
     scale.value = withSequence(
-      withTiming(1.22, { duration: 110 }),
-      withTiming(1, { duration: 180 }),
+      withTiming(1.14, { duration: 80 }),
+      withTiming(1, { duration: 140 }),
     );
     rotate.value = withSequence(
-      withTiming(-8, { duration: 70 }),
-      withTiming(8, { duration: 70 }),
-      withTiming(0, { duration: 100 }),
+      withTiming(-5, { duration: 55 }),
+      withTiming(5, { duration: 55 }),
+      withTiming(0, { duration: 80 }),
     );
   }, [rotate, scale, trigger]);
 
@@ -78,8 +78,8 @@ export const CustomTabBar = ({
   }, [setTabBarHidden, state.index]);
 
   const tabBarStyle = useAnimatedStyle(() => ({
-    transform: [{ translateY: withTiming(tabBarHidden ? 88 : 0, { duration: 180 }) }],
-    opacity: withTiming(tabBarHidden ? 0 : 1, { duration: 140 }),
+    transform: [{ translateY: withTiming(tabBarHidden ? 88 : 0, { duration: 200 }) }],
+    opacity: withTiming(tabBarHidden ? 0 : 1, { duration: 160 }),
   }), [tabBarHidden]);
 
   // console.log("TabBar Rendered - Update Available:", hasUpdate);
