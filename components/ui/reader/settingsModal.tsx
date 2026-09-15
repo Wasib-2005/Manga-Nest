@@ -11,6 +11,7 @@ import {
   Alert,
 } from "react-native";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
+import * as ImagePicker from "expo-image-picker";
 import type { ViewMode } from "./pageViewer";
 import { setTitlePage, clearTitlePage } from "../../../services/reader/libraryService";
 
@@ -39,6 +40,7 @@ interface Props {
    * parent (LibraryScreen) can refresh cover images.
    */
   onTitlePageChanged?: () => void;
+  onReplacePageImage?: (pageIndex: number, newUri: string) => Promise<void>;
 }
 
 const MODES: { key: ViewMode; label: string; icon: string; desc: string }[] = [
@@ -81,10 +83,39 @@ export const SettingsModal = ({
   pagePadding,
   onPagePaddingChange,
   onTitlePageChanged,
+  onReplacePageImage,
 }: Props) => {
   const [jumpText, setJumpText] = useState("");
   const [isTitlePage, setIsTitlePage] = useState(false);
   const [titlePageSaving, setTitlePageSaving] = useState(false);
+  const [pageReplacing, setPageReplacing] = useState(false);
+
+  const handleReplacePageImage = async () => {
+    if (pageReplacing || !onReplacePageImage) return;
+    try {
+      const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (!permission.granted) {
+        Alert.alert("Permission Required", "Media library access is needed to select an image.");
+        return;
+      }
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ["images"],
+        allowsEditing: false,
+        quality: 1,
+      });
+      if (result.canceled || !result.assets?.length) return;
+
+      setPageReplacing(true);
+      const pickedUri = result.assets[0].uri;
+      await onReplacePageImage(currentPage, pickedUri);
+      Alert.alert("Page Updated", `Page ${currentPage + 1} image has been updated.`);
+    } catch (err) {
+      console.error("Replace page image error:", err);
+      Alert.alert("Error", "Failed to update page image.");
+    } finally {
+      setPageReplacing(false);
+    }
+  };
 
   // Reset jump input when modal opens
   useEffect(() => {
@@ -329,53 +360,69 @@ export const SettingsModal = ({
             </Text>
           </View>
 
-          {/* ── Set as Title Page ─────────────────────────────────────────── */}
+          {/* ── Cover Image + Page Image — side-by-side row ─────────────── */}
           <View style={s.section}>
-            <SectionLabel icon="image-edit-outline" text="Cover Image" />
+            <SectionLabel icon="image-edit-outline" text="Images" />
 
-            <TouchableOpacity
-              activeOpacity={0.75}
-              onPress={() => handleTitlePageToggle(!isTitlePage)}
-              style={[s.titlePageRow, isTitlePage && s.titlePageRowActive]}
-            >
-              {/* Left side */}
-              <View style={[s.titlePageIconWrap, isTitlePage && s.titlePageIconWrapActive]}>
-                <MaterialCommunityIcons
-                  name="format-title"
-                  size={20}
-                  color={isTitlePage ? "#38D926" : "#334155"}
-                />
-              </View>
-
-              <View style={s.titlePageTextWrap}>
-                <Text style={[s.titlePageLabel, isTitlePage && s.titlePageLabelActive]}>
-                  Set as title page
-                </Text>
-                <Text style={s.titlePageSub}>
-                  {isTitlePage
-                    ? `Page ${currentPage + 1} · EP ${currentEp}`
-                    : `Use page ${currentPage + 1} as the cover`}
-                </Text>
-              </View>
-
-              {/* Checkbox */}
-              <View style={[s.checkbox, isTitlePage && s.checkboxChecked]}>
-                {isTitlePage && (
-                  <MaterialCommunityIcons name="check" size={14} color="#000" />
-                )}
-              </View>
-            </TouchableOpacity>
-
-            {isTitlePage && (
+            <View style={s.imageCardRow}>
+              {/* Cover card */}
               <TouchableOpacity
-                onPress={() => handleTitlePageToggle(false)}
-                style={s.clearTitleBtn}
-                activeOpacity={0.7}
+                activeOpacity={0.75}
+                onPress={() => handleTitlePageToggle(!isTitlePage)}
+                style={[s.imageCard, isTitlePage && s.imageCardActive]}
               >
-                <MaterialCommunityIcons name="restore" size={13} color="#475569" />
-                <Text style={s.clearTitleText}>Revert to default cover</Text>
+                <View style={[s.imageCardIcon, isTitlePage && s.imageCardIconActive]}>
+                  <MaterialCommunityIcons
+                    name="format-title"
+                    size={20}
+                    color={isTitlePage ? "#38D926" : "#334155"}
+                  />
+                </View>
+                <Text style={[s.imageCardLabel, isTitlePage && s.imageCardLabelActive]}>
+                  Cover Page
+                </Text>
+                <Text style={s.imageCardSub} numberOfLines={2}>
+                  {isTitlePage
+                    ? `Pg ${currentPage + 1} · EP ${currentEp}`
+                    : `Set pg ${currentPage + 1} as cover`}
+                </Text>
+                {isTitlePage && (
+                  <TouchableOpacity
+                    onPress={() => handleTitlePageToggle(false)}
+                    style={s.imageCardClear}
+                    activeOpacity={0.7}
+                    hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                  >
+                    <MaterialCommunityIcons name="restore" size={11} color="#475569" />
+                    <Text style={s.imageCardClearText}>Revert</Text>
+                  </TouchableOpacity>
+                )}
               </TouchableOpacity>
-            )}
+
+              {/* Page Image card */}
+              {onReplacePageImage && (
+                <TouchableOpacity
+                  activeOpacity={0.75}
+                  onPress={handleReplacePageImage}
+                  style={s.imageCard}
+                  disabled={pageReplacing}
+                >
+                  <View style={s.imageCardIcon}>
+                    <MaterialCommunityIcons
+                      name="image-sync"
+                      size={20}
+                      color="#38D926"
+                    />
+                  </View>
+                  <Text style={s.imageCardLabel}>Page Change</Text>
+                  <Text style={s.imageCardSub} numberOfLines={2}>
+                    {pageReplacing
+                      ? "Updating..."
+                      : `Replace pg ${currentPage + 1} image`}
+                  </Text>
+                </TouchableOpacity>
+              )}
+            </View>
           </View>
         </ScrollView>
       </View>
@@ -783,6 +830,69 @@ const s = StyleSheet.create({
   clearTitleText: {
     color: "#475569",
     fontSize: 11,
+    fontWeight: "700",
+  },
+
+  // ── Image cards row (Cover + Page side-by-side)
+  imageCardRow: {
+    flexDirection: "row",
+    gap: 10,
+  },
+  imageCard: {
+    flex: 1,
+    backgroundColor: "#0d1420",
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "#141c2b",
+    paddingVertical: 14,
+    paddingHorizontal: 12,
+    gap: 6,
+    alignItems: "center",
+  },
+  imageCardActive: {
+    backgroundColor: "#38D92610",
+    borderColor: "#38D926",
+  },
+  imageCardIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 12,
+    backgroundColor: "#141c2b",
+    justifyContent: "center",
+    alignItems: "center",
+    marginBottom: 2,
+  },
+  imageCardIconActive: {
+    backgroundColor: "#38D92620",
+  },
+  imageCardLabel: {
+    color: "#475569",
+    fontSize: 12,
+    fontWeight: "800",
+    textAlign: "center",
+  },
+  imageCardLabelActive: {
+    color: "#38D926",
+  },
+  imageCardSub: {
+    color: "#334155",
+    fontSize: 10,
+    textAlign: "center",
+    lineHeight: 14,
+  },
+  imageCardClear: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    marginTop: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    borderRadius: 8,
+    backgroundColor: "#141c2b",
+  },
+  imageCardClearText: {
+    color: "#475569",
+    fontSize: 10,
     fontWeight: "700",
   },
 });
