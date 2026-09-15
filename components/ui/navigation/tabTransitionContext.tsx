@@ -1,17 +1,18 @@
 import React, { createContext, useContext, useMemo, useState } from "react";
-import { Dimensions } from "react-native";
+import { useWindowDimensions } from "react-native";
 import {
+  Easing,
   useAnimatedStyle,
   useSharedValue,
   withTiming,
 } from "react-native-reanimated";
 
-const DEFAULT_TAB_CHANGE_ANIMATION_DURATION = 180;
+const DEFAULT_TAB_CHANGE_ANIMATION_DURATION = 220;
 const configuredDuration = Number(
   process.env.EXPO_PUBLIC_TAB_CHANGE_ANIMATION_DURATION,
 );
 const TAB_CHANGE_ANIMATION_DURATION =
-  Number.isFinite(configuredDuration) && configuredDuration >= 0
+  Number.isFinite(configuredDuration) && configuredDuration >= 120 && configuredDuration <= 300
     ? configuredDuration
     : DEFAULT_TAB_CHANGE_ANIMATION_DURATION;
 
@@ -92,6 +93,8 @@ export function useTabScreenAnimation(routeName: string) {
   const { direction, targetRoute, transitionKey, consumeTransition } =
     useTabTransition();
   const translateX = useSharedValue(0);
+  const opacity = useSharedValue(1);
+  const { width } = useWindowDimensions();
 
   React.useEffect(() => {
     if (
@@ -101,13 +104,22 @@ export function useTabScreenAnimation(routeName: string) {
     ) {
       return;
     }
-    translateX.value = direction * Dimensions.get("window").width;
+    // A short slide keeps the destination recognizable and avoids the heavy
+    // full-screen sweep that made quick tab changes feel delayed.
+    translateX.value = direction * width * 0.18;
+    opacity.value = 0.82;
     translateX.value = withTiming(0, {
       duration: TAB_CHANGE_ANIMATION_DURATION,
+      easing: Easing.out(Easing.cubic),
     });
-  }, [direction, routeName, targetRoute, transitionKey, translateX]);
+    opacity.value = withTiming(1, {
+      duration: TAB_CHANGE_ANIMATION_DURATION,
+      easing: Easing.out(Easing.cubic),
+    });
+  }, [consumeTransition, direction, opacity, routeName, targetRoute, transitionKey, translateX, width]);
 
   return useAnimatedStyle(() => ({
     transform: [{ translateX: translateX.value }],
+    opacity: opacity.value,
   }));
 }
