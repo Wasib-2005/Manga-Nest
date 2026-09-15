@@ -12,9 +12,7 @@ Use this file as the first stop for any code change or feature work.
 - Persistent data model: SQLite + local filesystem + AsyncStorage
 - Supported sources today:
   - MangaDex (`mangadex.org`)
-  - nhentai (`nhentai.net`)
-  - HentaiCity (`hentaicity.com`)
-  - Hentaiera (`hentaiera.com`)
+  - Built-in gallery providers
   - Sequential image URLs (`.../01.jpg`, `.../02.jpg`, etc.)
 
 The app is designed around a simple pattern:
@@ -97,7 +95,7 @@ export interface MangaMeta {
   tags: string[];
   genres: string[];
   ep: string;
-  source: "nhentai" | "mangadex" | "sequential" | "hentaicity" | "hentaiera";
+  source: SupportedSource;
   imageUrls: string[];
   scanUrl?: string;
 }
@@ -128,7 +126,7 @@ It looks for `base + index + extension` and keeps scanning forward until two con
 - Builds a direct-image list from the at-home server data.
 - Returns `source: "mangadex"`.
 
-### `scrape/nhentai.ts`
+### Resilient gallery scraper
 
 This scraper is more defensive and has fallback parsing logic:
 

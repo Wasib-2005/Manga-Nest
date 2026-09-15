@@ -1,6 +1,6 @@
 # 📚 Manga Nest
 
-> A lightweight, extensible manga downloader for Android. Download full series from MangaDex and other image-based sources — built with React Native & Expo.
+> A lightweight, extensible offline manga library for Android. Download chapters from MangaDex and compatible image-based sources, then read them locally — built with React Native and Expo.
 
 <div>
   <img src="https://img.shields.io/badge/React_Native-61DAFB?style=for-the-badge&logo=react&logoColor=black" alt="React Native" />
@@ -28,6 +28,8 @@
 | 📥 **Sequential Downloads** | Automatically grab entire ep |
 | 🦊 **MangaDex Support** | Native built-in scraper for MangaDex chapter URLs |
 | 🌐 **Generic Image Scraper** | Works with any site serving images via sequential URLs |
+| 📚 **Offline Library** | Browse downloaded titles with covers, authors, tags, chapter/page totals, and reading progress |
+| 📖 **Reader Progress** | Continue from the last page of each downloaded chapter |
 | 🔄 **Backup & Restore** | Export your library and restore it anytime or on a new device |
 | 🔔 **Version Checker** | Get notified of new releases from within the app |
 | 🖼️ **Custom Cover Art** | Set any page as the cover image for any manga |
@@ -48,7 +50,7 @@ Always copy the **chapter root URL** from your browser's address bar — not a p
 1. **Navigate** to the chapter on MangaDex or a compatible source.
 2. **Copy the full URL** from the address bar.
 3. **Paste it** into the app's URL field and tap Fetch. A metadata modal will appear — verify the details before continuing.
-4. **Set the chapter number manually.** Automatic episode counters are not yet available. For consecutive chapters of the same series, keep the title field *exactly* identical — chapters with matching titles are grouped as a single series.
+4. **Set the chapter number manually.** For consecutive chapters of the same series, keep the title field *exactly* identical — chapters with matching titles are grouped as a single series.
 5. **Refresh your library** once the background download completes to see the new entry.
 
 ### Supported URL formats
@@ -78,7 +80,7 @@ Always copy the **chapter root URL** from your browser's address bar — not a p
 1. Go to **Utilities** and choose **Restore**.
 2. Navigate to and select the exact backup folder you want to restore.
 
-### Required backup folder structure
+### Backup contents
 
 For restoration to succeed, the selected folder must contain:
 
@@ -92,6 +94,13 @@ your-backup-folder/
 
 > [!IMPORTANT]
 > `SQLite/library.db` contains the library metadata. Older JSON backups are imported automatically once on app startup.
+
+## 📚 Library and Reader
+
+- Use search, sorting, filters, and the view-mode switcher to find titles quickly.
+- Cards show source, author, chapter and page totals, tags, and saved reading progress.
+- Tap a one-chapter title to open it immediately. Titles with multiple chapters open a chapter picker.
+- Long-press a title or chapter for metadata editing and deletion options.
 
 ---
 
@@ -115,6 +124,16 @@ npm install
 ```bash
 npx expo start
 ```
+
+### Creating a local Android APK
+
+From the project root, run:
+
+```fish
+fish build-android.fish
+```
+
+The script optionally sends the finished APK to a selected KDE Connect device. Builds are saved in `dist/` with a timestamped filename.
 
 ---
 
@@ -182,4 +201,4 @@ export async function scrapeFromUrl(url: string) {
 > **Legal notice:** I am not responsible for any legal issues, copyright claims, or consequences resulting from the use of this software. This is an experimental hobby project created solely for personal use and learning, with no commercial intent.
 
 > [!CAUTION]
-> **Development context:** This is my first app, built with React Native/Expo and AI assistance. No database is used, which may occasionally cause unexpected state behavior. I do not plan to provide ongoing support or regular updates. Fork and modify freely.
+> **Development context:** This is a personal project built with React Native, Expo, and AI assistance. Metadata is stored locally in SQLite and downloaded pages remain on the device. Fork and modify freely.

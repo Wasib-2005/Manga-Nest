@@ -42,6 +42,7 @@ app-example
 /ios
 /android
 build*
+!build-android.fish
 *apk
 
 # Environment files (prevent accidental API key leaks)
