@@ -1,28 +1,99 @@
 import React, { useContext } from "react";
 import { View, Text, TouchableOpacity, Platform } from "react-native";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
-import { BottomTabBarProps } from "@react-navigation/bottom-tabs";
 import { CheckUpdateContext } from "@/services/checkUpdates/checkUpdateContext";
+import Animated, {
+  useAnimatedStyle,
+  useSharedValue,
+  withSequence,
+  withTiming,
+} from "react-native-reanimated";
+import { useTabTransition } from "./tabTransitionContext";
+
+type CustomTabBarProps = {
+  state: {
+    index: number;
+    routes: Array<{ key: string; name: string }>;
+  };
+  descriptors: Record<string, { options: { tabBarLabel?: unknown; title?: string } }>;
+  navigation: {
+    emit: (event: { type: "tabPress"; target: string; canPreventDefault: true }) => {
+      defaultPrevented?: boolean;
+    };
+    navigate: (name: string) => void;
+  };
+};
+
+const AnimatedTabIcon = ({
+  name,
+  color,
+  trigger,
+}: {
+  name: any;
+  color: string;
+  trigger: number;
+}) => {
+  const scale = useSharedValue(1);
+  const rotate = useSharedValue(0);
+
+  React.useEffect(() => {
+    if (trigger === 0) return;
+    scale.value = withSequence(
+      withTiming(1.22, { duration: 110 }),
+      withTiming(1, { duration: 180 }),
+    );
+    rotate.value = withSequence(
+      withTiming(-8, { duration: 70 }),
+      withTiming(8, { duration: 70 }),
+      withTiming(0, { duration: 100 }),
+    );
+  }, [rotate, scale, trigger]);
+
+  const animatedStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: scale.value }, { rotate: `${rotate.value}deg` }],
+  }));
+
+  return (
+    <Animated.View style={animatedStyle}>
+      <MaterialCommunityIcons name={name} size={22} color={color} />
+    </Animated.View>
+  );
+};
 
 export const CustomTabBar = ({
   state,
   descriptors,
   navigation,
-}: BottomTabBarProps) => {
+}: CustomTabBarProps) => {
   // Destructure status (or isUpdateAvailable if you used the boolean naming variant)
   const { status, isUpdateAvailable } = useContext(CheckUpdateContext);
+  const { setTransition, tabBarHidden, setTabBarHidden } = useTabTransition();
   
   // Checks if an update is ready based on either string state or explicit boolean flag
   const hasUpdate = status === "update_available" || isUpdateAvailable === true;
+  const [iconTrigger, setIconTrigger] = React.useState(0);
+  const [animatedRouteKey, setAnimatedRouteKey] = React.useState<string | null>(null);
+  React.useEffect(() => {
+    if (state.index !== 0) setTabBarHidden(false);
+  }, [setTabBarHidden, state.index]);
+
+  const tabBarStyle = useAnimatedStyle(() => ({
+    transform: [{ translateY: withTiming(tabBarHidden ? 88 : 0, { duration: 180 }) }],
+    opacity: withTiming(tabBarHidden ? 0 : 1, { duration: 140 }),
+  }), [tabBarHidden]);
 
   // console.log("TabBar Rendered - Update Available:", hasUpdate);
 
   return (
-    <View
-      style={{
+    <Animated.View
+      style={[{
         flexDirection: "row",
+        position: "absolute",
+        left: 0,
+        right: 0,
+        bottom: 0,
         backgroundColor: "#030712",
-        height: Platform.OS === "ios" ? 88 : 88,
+        height: 88,
         paddingBottom: Platform.OS === "ios" ? 25 : 8,
         borderTopWidth: 1,
         borderTopColor: "#141c2b",
@@ -31,17 +102,20 @@ export const CustomTabBar = ({
         shadowOffset: { width: 0, height: -4 },
         shadowOpacity: 0.2,
         shadowRadius: 4,
-      }}
+        overflow: "hidden",
+      }, tabBarStyle]}
     >
       {state.routes.map((route, index) => {
         const { options } = descriptors[route.key];
 
         const rawLabel = options.tabBarLabel ?? options.title ?? route.name;
-        const label = typeof rawLabel === "function" ? route.name : rawLabel;
+        const label = typeof rawLabel === "string" ? rawLabel : route.name;
 
         const isFocused = state.index === index;
 
         const onPress = () => {
+          setAnimatedRouteKey(route.key);
+          setIconTrigger((value) => value + 1);
           const event = navigation.emit({
             type: "tabPress",
             target: route.key,
@@ -49,6 +123,7 @@ export const CustomTabBar = ({
           });
 
           if (!isFocused && !event.defaultPrevented) {
+            setTransition(index > state.index ? 1 : -1, route.name);
             navigation.navigate(route.name);
           }
         };
@@ -88,10 +163,10 @@ export const CustomTabBar = ({
                   borderColor: isFocused ? "#38D92630" : "transparent",
                 }}
               >
-                <MaterialCommunityIcons
+                <AnimatedTabIcon
                   name={iconName}
-                  size={22}
                   color={isFocused ? "#38D926" : "#475569"}
+                  trigger={animatedRouteKey === route.key ? iconTrigger : 0}
                 />
               </View>
 
@@ -143,6 +218,6 @@ export const CustomTabBar = ({
           </TouchableOpacity>
         );
       })}
-    </View>
+    </Animated.View>
   );
 };

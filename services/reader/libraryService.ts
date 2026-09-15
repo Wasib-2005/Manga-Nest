@@ -1,4 +1,13 @@
-import { Directory, File, Paths } from "expo-file-system";
+import { Directory, Paths } from "expo-file-system";
+import {
+  clearTitlePage as clearTitlePageDb,
+  deleteChapter,
+  deleteManga,
+  initializeDatabase,
+  listManga,
+  renameChapter,
+  updateManga,
+} from "./database";
 
 export interface ChapterInfo {
   ep: string;
@@ -12,7 +21,7 @@ export interface MangaEntry {
   author: string;
   tags: string[];
   genres: string[];
-  source: "nhentai" | "mangadex" | "sequential";
+  source: "nhentai" | "mangadex" | "sequential" | "hentaicity" | "hentaiera" | "local";
   addedAt: string;
   chapters: ChapterInfo[];
 }
@@ -20,56 +29,20 @@ export interface MangaEntry {
 const getRoot = () => new Directory(Paths.document, "manga");
 
 /**
- * Reads the library index and populates all manga metadata and chapters.
+ * Reads relational manga metadata and chapter records from SQLite.
  */
 export const readMangaLibrary = async (): Promise<MangaEntry[]> => {
-  const root = getRoot();
-  if (!root.exists) return [];
-
   try {
-    const indexFile = new File(`${root.uri}/index.json`);
-    if (!indexFile.exists) return [];
-
-    const indexData = JSON.parse(await indexFile.text());
-    const entries: MangaEntry[] = [];
-
-    for (const indexEntry of indexData) {
-      const mangaDir = new Directory(root, indexEntry.uid);
-      const titleFile = new File(`${mangaDir.uri}/title.json`);
-      if (!titleFile.exists) continue;
-
-      const titleData = JSON.parse(await titleFile.text());
-      const chapters: ChapterInfo[] = [];
-
-      for (const item of mangaDir.list()) {
-        if (!(item instanceof Directory)) continue;
-        const infoFile = new File(`${item.uri}/info.json`);
-        if (infoFile.exists) {
-          const info = JSON.parse(await infoFile.text());
-          chapters.push({
-            ep: info.ep,
-            pages: info.pages,
-            savedAt: info.savedAt,
-          });
-        }
-      }
-
-      chapters.sort(
-        (a, b) => new Date(a.savedAt).getTime() - new Date(b.savedAt).getTime(),
-      );
-
-      entries.push({
-        uid: indexEntry.uid,
-        name: titleData.name,
-        author: titleData.author || "",
-        tags: titleData.tags || [],
-        genres: titleData.genres || [],
-        source: titleData.source,
-        addedAt: titleData.addedAt || new Date().toISOString(),
-        chapters,
-      });
-    }
-    return entries;
+    return (await listManga()).map((manga) => ({
+      uid: manga.uid,
+      name: manga.name,
+      author: manga.author,
+      tags: manga.tags,
+      genres: manga.genres,
+      source: manga.source,
+      addedAt: manga.addedAt,
+      chapters: manga.chapters,
+    }));
   } catch (err) {
     console.error("Library Read Error:", err);
     return [];
@@ -83,8 +56,6 @@ export const getChapterPages = async (uid: string, ep: string): Promise<string[]
   try {
     const root = getRoot();
     const chapterDir = new Directory(new Directory(root, uid), ep);
-
-    console.log("sfda", chapterDir)
 
     if (!chapterDir.exists) return [];
 
@@ -109,34 +80,26 @@ export const getChapterPages = async (uid: string, ep: string): Promise<string[]
   }
 };
 
-/** Updates metadata in title.json (name, author, tags, genres) */
+/** Updates normalized manga metadata and relations in SQLite. */
 export const updateMangaMetadata = async (
   uid: string,
   updates: Partial<MangaEntry>,
 ) => {
-  const root = getRoot();
-  const mangaDir = new Directory(root, uid);
-  const titleFile = new File(`${mangaDir.uri}/title.json`);
-
-  if (titleFile.exists) {
-    const current = JSON.parse(await titleFile.text());
-    const updatedData = {
-      ...current,
-      ...updates,
-      updatedAt: new Date().toISOString(),
-    };
-    await titleFile.write(JSON.stringify(updatedData, null, 2));
-    return true;
-  }
-  return false;
+  await initializeDatabase();
+  await updateManga(
+    uid,
+    {
+      name: updates.name,
+      author: updates.author,
+    },
+    updates.tags,
+    updates.genres,
+  );
+  return true;
 };
 
 /**
- * Saves the chosen title page into title.json.
- * titlePage: null clears the override and falls back to page 1 of firstEp.
- *
- * Stored shape inside title.json:
- *   "titlePage": { "ep": "Chapter 1.1", "pageNum": 5 }
+ * Saves the chosen title page in the manga relation.
  */
 export const setTitlePage = async (
   uid: string,
@@ -144,42 +107,21 @@ export const setTitlePage = async (
   pageNum: number, // 0-based index into the pages array
 ): Promise<void> => {
 
-  const root = getRoot();
-  console.log(uid)
-  const mangaDir = new Directory(root, uid);
-  console.log("manga",mangaDir)
-  const titleFile = new File(`${mangaDir.uri}/title.json`);
-
-  if (!titleFile.exists) return;
-
-  const current = JSON.parse(await titleFile.text());
-  current.titlePage = { ep, pageNum };
-  current.updatedAt = new Date().toISOString();
-  console.log(current)
-  await titleFile.write(JSON.stringify(current, null, 2));
+  await updateManga(uid, { titlePageEp: ep, titlePageNum: pageNum });
 };
 
 /**
  * Clears the title-page override so the library falls back to page 1.
  */
 export const clearTitlePage = async (uid: string): Promise<void> => {
-  const root = getRoot();
-  const mangaDir = new Directory(root, uid);
-  const titleFile = new File(`${mangaDir.uri}/title.json`);
-
-  if (!titleFile.exists) return;
-
-  const current = JSON.parse(await titleFile.text());
-  delete current.titlePage;
-  current.updatedAt = new Date().toISOString();
-  await titleFile.write(JSON.stringify(current, null, 2));
+  await clearTitlePageDb(uid);
 };
 
 /**
  * Returns the URI of the title page image.
  *
  * Priority:
- *  1. title.json → titlePage.ep / titlePage.pageNum   (user-chosen page)
+ *  1. SQLite title-page relation
  *  2. First numerically-sorted image in firstEp folder (original behaviour)
  */
 export const getFirstPageUri = async (
@@ -190,25 +132,21 @@ export const getFirstPageUri = async (
     const root = getRoot();
     const mangaDir = new Directory(root, uid);
 
-    // ── 1. Check for stored title-page override ───────────────────────────
-    const titleFile = new File(`${mangaDir.uri}/title.json`);
-
-    if (titleFile.exists) {
-      const titleData = JSON.parse(await titleFile.text());
-      const stored = titleData.titlePage as { ep: string; pageNum: number } | undefined;
-
-      if (stored) {
-        const pages = await getChapterPages(uid, stored.ep);
-
-        const uri = pages[stored.pageNum] ?? pages[0] ?? null;
-        if (uri) return uri;
-        // If the stored page no longer exists (e.g. chapter deleted), fall through
-      }
+    const db = await initializeDatabase();
+    const titlePage = await db.getFirstAsync<{
+      titlePageEp: string | null;
+      titlePageNum: number | null;
+    }>(
+      "SELECT title_page_ep AS titlePageEp, title_page_num AS titlePageNum FROM manga WHERE uid = ?",
+      uid,
+    );
+    if (titlePage?.titlePageEp && titlePage.titlePageNum !== null) {
+      const pages = await getChapterPages(uid, titlePage.titlePageEp);
+      const uri = pages[titlePage.titlePageNum] ?? pages[0] ?? null;
+      if (uri) return uri;
     }
 
     // ── 2. Default: first image in firstEp ───────────────────────────────
-    const dir = new Directory(new Directory(mangaDir, firstEp), "");
-    // Re-use the chapter dir directly
     const chapterDir = new Directory(mangaDir, firstEp);
     if (!chapterDir.exists) return null;
 
@@ -226,7 +164,7 @@ export const getFirstPageUri = async (
   }
 };
 
-/** Renames a chapter folder and updates internal info.json */
+/** Renames a chapter folder and updates its relational chapter record. */
 export const renameChapterEp = async (
   uid: string,
   oldEp: string,
@@ -238,36 +176,14 @@ export const renameChapterEp = async (
 
   if (oldDir.exists && !newDir.exists) {
     await oldDir.move(newDir);
-    const infoFile = new File(`${newDir.uri}/info.json`);
-    if (infoFile.exists) {
-      const info = JSON.parse(await infoFile.text());
-      info.ep = newEp;
-      await infoFile.write(JSON.stringify(info, null, 2));
-    }
-
-    // If this ep was the stored title page, update the reference
-    const mangaTitleFile = new File(`${titleDir.uri}/title.json`);
-    if (mangaTitleFile.exists) {
-      const titleData = JSON.parse(await mangaTitleFile.text());
-      if (titleData.titlePage?.ep === oldEp) {
-        titleData.titlePage.ep = newEp;
-        titleData.updatedAt = new Date().toISOString();
-        await mangaTitleFile.write(JSON.stringify(titleData, null, 2));
-      }
-    }
+    await renameChapter(uid, oldEp, newEp);
   }
 };
 
 export const deleteFullManga = async (uid: string) => {
   const root = getRoot();
   const titleDir = new Directory(root, uid);
-  const indexFile = new File(`${root.uri}/index.json`);
-
-  if (indexFile.exists) {
-    const entries = JSON.parse(await indexFile.text());
-    const updated = entries.filter((e: any) => e.uid !== uid);
-    await indexFile.write(JSON.stringify(updated, null, 2));
-  }
+  await deleteManga(uid);
   if (titleDir.exists) titleDir.delete();
 };
 
@@ -279,22 +195,12 @@ export const deleteChapterFiles = async (
   const chapterDir = new Directory(titleDir, ep);
   if (chapterDir.exists) chapterDir.delete();
 
-  // If the deleted chapter was the stored title page, clear the override
-  const titleFile = new File(`${titleDir.uri}/title.json`);
-  if (titleFile.exists) {
-    const titleData = JSON.parse(await titleFile.text());
-    if (titleData.titlePage?.ep === ep) {
-      delete titleData.titlePage;
-      titleData.updatedAt = new Date().toISOString();
-      await titleFile.write(JSON.stringify(titleData, null, 2));
-    }
-  }
-
   const remaining = titleDir.list().filter((item) => item instanceof Directory);
   if (remaining.length === 0) {
-    await deleteFullManga(uid);
+    await deleteChapter(uid, ep);
     return true;
   }
+  await deleteChapter(uid, ep);
   return false;
 };
 

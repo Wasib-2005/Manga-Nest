@@ -32,6 +32,8 @@ interface Props {
   mangaUid: string;
   /** ep (chapter) currently open */
   currentEp: string;
+  pagePadding: number;
+  onPagePaddingChange: (value: number) => void;
   /**
    * Called after a title-page is successfully set or cleared so the
    * parent (LibraryScreen) can refresh cover images.
@@ -76,9 +78,10 @@ export const SettingsModal = ({
   onJumpToPage,
   mangaUid,
   currentEp,
+  pagePadding,
+  onPagePaddingChange,
   onTitlePageChanged,
 }: Props) => {
-  console.log(currentEp)
   const [jumpText, setJumpText] = useState("");
   const [isTitlePage, setIsTitlePage] = useState(false);
   const [titlePageSaving, setTitlePageSaving] = useState(false);
@@ -221,6 +224,25 @@ export const SettingsModal = ({
             </View>
           )}
 
+          <View style={s.section}>
+            <SectionLabel icon="format-line-spacing" text="Page Padding" />
+            <View style={s.paddingRow}>
+              <TextInput
+                value={String(pagePadding)}
+                onChangeText={(text) => {
+                  const digits = text.replace(/[^0-9]/g, "");
+                  const value = Math.min(10, Number(digits || 0));
+                  onPagePaddingChange(value);
+                }}
+                keyboardType="number-pad"
+                maxLength={2}
+                selectTextOnFocus
+                style={s.paddingInput}
+              />
+              <Text style={s.paddingHint}>px on all sides (maximum 10)</Text>
+            </View>
+          </View>
+
           {/* ── Autoplay ─────────────────────────────────────────────────── */}
           {mode === "autoplay" && (
             <View style={s.section}>
@@ -235,7 +257,7 @@ export const SettingsModal = ({
               </View>
 
               <View style={s.speedHeader}>
-                <SectionLabel icon="speedometer-outline" text="Seconds / page" />
+                <SectionLabel icon="speedometer" text="Seconds / page" />
                 <View style={s.speedBadge}>
                   <Text style={s.speedBadgeText}>{autoPlaySpeed}s</Text>
                 </View>
@@ -451,6 +473,29 @@ const s = StyleSheet.create({
 
   section: {
     marginTop: 24,
+  },
+  paddingRow: {
+    flexDirection: "row" as const,
+    alignItems: "center" as const,
+    gap: 10,
+  },
+  paddingInput: {
+    width: 58,
+    height: 42,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "#334155",
+    backgroundColor: "#0f172a",
+    color: "#f8fafc",
+    fontSize: 17,
+    fontWeight: "800" as const,
+    textAlign: "center" as const,
+  },
+  paddingHint: {
+    flex: 1,
+    color: "#64748b",
+    fontSize: 12,
+    fontWeight: "600" as const,
   },
 
   // ── Mode cards

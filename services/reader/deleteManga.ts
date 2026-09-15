@@ -1,4 +1,5 @@
-import { Directory, File, Paths } from "expo-file-system";
+import { Directory, Paths } from "expo-file-system";
+import { deleteChapter, deleteManga } from "./database";
 
 /**
  * Deletes a specific chapter folder. 
@@ -13,13 +14,18 @@ export const deleteChapterFiles = async (uid: string, ep: string): Promise<boole
       chapterDir.delete();
     }
 
-    // Check if any chapters remain
-    const remainingFolders = titleDir.list().filter(item => item instanceof Directory);
+    const remainingFolders = titleDir.exists
+      ? titleDir.list().filter((item) => item instanceof Directory)
+      : [];
 
     if (remainingFolders.length === 0) {
-      await deleteFullManga(uid);
+      await deleteManga(uid);
+      if (titleDir.exists) {
+        titleDir.delete();
+      }
       return true; // Full manga gone
     }
+    await deleteChapter(uid, ep);
     return false;
   } catch (error) {
     console.error("Error deleting chapter:", error);
@@ -28,24 +34,16 @@ export const deleteChapterFiles = async (uid: string, ep: string): Promise<boole
 };
 
 /**
- * Deletes the entire manga folder and cleans index.json
+ * Deletes the entire manga folder and its relational database row.
  */
 export const deleteFullManga = async (uid: string) => {
   try {
     const root = new Directory(Paths.document, "manga");
     const titleDir = new Directory(root, uid);
-    const indexFile = new File(`${root.uri}/index.json`);
-
-    // Update index.json
-    if (indexFile.exists) {
-      const entries = JSON.parse(await indexFile.text());
-      const updated = entries.filter((e: any) => e.uid !== uid);
-      await indexFile.write(JSON.stringify(updated, null, 2));
-    }
-
     if (titleDir.exists) {
       titleDir.delete();
     }
+    await deleteManga(uid);
   } catch (error) {
     console.error("Error deleting full manga:", error);
     throw error;

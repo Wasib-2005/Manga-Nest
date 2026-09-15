@@ -2,7 +2,7 @@
   "expo": {
     "name": "Manga Nest",
     "slug": "Manga-Nest",
-    "version": "1.0.4",
+    "version": "1.1.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "manganest",
@@ -19,12 +19,8 @@
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
       "predictiveBackGestureEnabled": false,
-      "permissions": [
-        "READ_EXTERNAL_STORAGE",
-        "WRITE_EXTERNAL_STORAGE"
-      ],
-      "package": "com.MangaNest.waslla",
-      "versionCode": 3
+      "permissions": ["READ_EXTERNAL_STORAGE", "WRITE_EXTERNAL_STORAGE"],
+      "package": "com.MangaNest.waslla"
     },
     "web": {
       "bundler": "metro",
@@ -36,18 +32,20 @@
       [
         "expo-splash-screen",
         {
-          "image": "./assets/images/splash-icon.png",
-          "imageWidth": 200,
+          "image": "./assets/images/icon.png",
+          "imageWidth": 180,
           "resizeMode": "contain",
-          "backgroundColor": "#ffffff",
+          "backgroundColor": "#030712",
           "dark": {
-            "backgroundColor": "#000000"
+            "backgroundColor": "#030712"
           }
         }
       ],
       "expo-font",
       "expo-web-browser",
-      "expo-image"
+      "expo-image",
+      "expo-sqlite",
+      "expo-status-bar"
     ],
     "experiments": {
       "typedRoutes": true,

@@ -5,12 +5,23 @@ import {
   ScrollView,
   TouchableOpacity,
   StatusBar,
+  Alert,
 } from "react-native";
 import { Directory, File, Paths } from "expo-file-system";
+import Animated, { FadeInDown, FadeIn } from "react-native-reanimated";
+import { MaterialCommunityIcons } from "@expo/vector-icons";
+import { useTabScreenAnimation } from "../../components/ui/navigation/tabTransitionContext";
 import { ProgressBar } from "../../components/ui/mangaDownloader/ProgressBar";
 import { LogConsole } from "../../components/ui/mangaDownloader/LogConsole";
+import {
+  initializeDatabase,
+  restoreSerializedDatabase,
+  serializeDatabase,
+} from "../../services/reader/database";
 
 const MANGA_PATH = "manga";
+const SQLITE_PATH = "SQLite";
+const SQLITE_FILE = "library.db";
 
 type OpStatus = "idle" | "running" | "done" | "error";
 
@@ -23,7 +34,54 @@ interface OpState {
 
 const IDLE_OP: OpState = { status: "idle", current: 0, total: 0, message: "" };
 
+const styles = {
+  backupHeroIcon: {
+    width: 56,
+    height: 56,
+    borderRadius: 18,
+    backgroundColor: "#38D92615",
+    borderWidth: 1,
+    borderColor: "#38D92635",
+    alignItems: "center" as const,
+    justifyContent: "center" as const,
+  },
+  backupHero: {
+    flexDirection: "row" as const,
+    alignItems: "center" as const,
+    gap: 12,
+    padding: 16,
+    borderRadius: 20,
+    backgroundColor: "#0a0e17",
+    borderWidth: 1,
+    borderColor: "#1e293b",
+    borderLeftWidth: 3,
+    borderLeftColor: "#38D926",
+  },
+  backupSummary: {
+    flexDirection: "row" as const,
+    alignItems: "center" as const,
+    justifyContent: "space-around" as const,
+    marginTop: 18,
+    paddingVertical: 12,
+    borderRadius: 14,
+    backgroundColor: "#07111f",
+    borderWidth: 1,
+    borderColor: "#10213a",
+  },
+  summaryItem: { alignItems: "center" as const, gap: 2 },
+  summaryValue: { color: "#e2e8f0", fontSize: 11, fontWeight: "800" as const },
+  summaryLabel: { color: "#475569", fontSize: 9, fontWeight: "600" as const },
+  summaryDivider: { width: 1, height: 26, backgroundColor: "#1e293b" },
+};
+
+const StatusDot = ({ color }: { color: string }) => (
+  <View
+    style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: color }}
+  />
+);
+
 export default function BackupRestore() {
+  const tabAnimation = useTabScreenAnimation("backup");
   // ── Separate state per operation ─────────────────────────────────────────
   const [backup, setBackup] = useState<OpState>(IDLE_OP);
   const [restore, setRestore] = useState<OpState>(IDLE_OP);
@@ -57,6 +115,7 @@ export default function BackupRestore() {
 
   const isDir = (item: any): item is Directory =>
     item instanceof Directory || typeof item?.list === "function";
+  const isFile = (item: any): item is File => !isDir(item);
 
   // ── Folder pickers ────────────────────────────────────────────────────────
 
@@ -109,25 +168,25 @@ export default function BackupRestore() {
     setRestore(IDLE_OP);
 
     try {
+      // Ensure the SQLite file exists and contains the latest metadata before copying it.
+      await initializeDatabase();
       const src = new Directory(Paths.document, MANGA_PATH);
       if (!src.exists) {
-        log("⚠️  No manga data found.");
-        setBackup({ ...IDLE_OP, status: "done" });
-        return;
+        log("⚠️  No manga image folders found; backing up SQLite metadata only.");
       }
 
-      const items = src.list();
-      if (!items.length) {
-        log("⚠️  manga/ folder is empty.");
-        setBackup({ ...IDLE_OP, status: "done" });
-        return;
-      }
+      const items = src.exists ? src.list() : [];
+      if (!items.length) log("⚠️  manga/ folder is empty.");
 
       const ts = new Date().toISOString().replace(/[:.]/g, "-");
       const name = `backup_manga_nest_${ts}`;
       log(`Creating backup folder: ${name}`);
 
-      const dest = await new Directory(backupDir).createDirectory(name);
+      // SAF-backed folders must use createDirectory(); Directory.create()
+      // only works for regular file:// paths.
+      const dest = backupDir.createDirectory(name);
+      const mangaDest = dest.createDirectory(MANGA_PATH);
+      log(`📦 Backup path: ${formatPath(dest.uri)}`);
 
       for (let i = 0; i < items.length; i++) {
         if (cancelRef.current) throw new Error("CANCELLED");
@@ -141,17 +200,22 @@ export default function BackupRestore() {
         log(`[${i + 1}/${items.length}] 💾 ${item.name}`);
 
         if (isDir(item)) {
-          await item.copy(dest);
+          await item.copy(mangaDest);
         } else {
           const f = item as File;
           const data = await f.text();
           const mime = item.name.endsWith(".json")
             ? "application/json"
             : "application/octet-stream";
-          const tf = await dest.createFile(item.name, mime);
+          const tf = await mangaDest.createFile(item.name, mime);
           await tf.write(data);
         }
       }
+
+      const dbDir = dest.createDirectory(SQLITE_PATH);
+      const dbFile = dbDir.createFile(SQLITE_FILE, "application/octet-stream");
+      await dbFile.write(await serializeDatabase());
+      log("💾 SQLite library database copied.");
 
       const createNomedia = dest.createFile(
         ".nomedia",
@@ -186,32 +250,89 @@ export default function BackupRestore() {
     setBackup(IDLE_OP);
 
     try {
-      // Resolve the actual manga/ directory inside the backup folder
-      let src: Directory;
-      if (restoreDir.name === "manga") {
-        src = restoreDir;
-      } else {
-        const candidate = new Directory(restoreDir, "manga");
-        if (candidate.exists) {
-          src = candidate;
+      // New backups contain manga/ and SQLite/ side by side. If the user
+      // selects a parent folder containing several backups, let them choose
+      // the exact backup instead of guessing.
+      const isBackupFolder = (dir: Directory) => {
+        const children = dir.list();
+        const mangaDir = children.find(
+          (item): item is Directory =>
+            isDir(item) && item.name.toLowerCase() === MANGA_PATH.toLowerCase(),
+        );
+        const sqliteDir = children.find(
+          (item): item is Directory =>
+            isDir(item) && item.name.toLowerCase() === SQLITE_PATH.toLowerCase(),
+        );
+        if (!mangaDir || !sqliteDir) return false;
+        return sqliteDir
+          .list()
+          .some((item) => item.name.toLowerCase() === SQLITE_FILE.toLowerCase());
+      };
+      let src = restoreDir;
+      if (!isBackupFolder(src)) {
+        const candidates = src
+          .list()
+          .filter((item): item is Directory => isDir(item))
+          .filter(isBackupFolder)
+          .sort((a, b) => b.name.localeCompare(a.name));
+        if (candidates.length === 0) {
+          throw new Error(
+            "No valid backup folder found. Select a folder containing manga/ and SQLite/library.db, or select its parent folder.",
+          );
+        }
+        if (candidates.length > 1) {
+          const selected = await new Promise<Directory | null>((resolve) => {
+            Alert.alert(
+              "Choose a backup",
+              "Select which backup you want to restore.",
+              [
+                ...candidates.slice(0, 3).map((candidate) => ({
+                  text: candidate.name,
+                  onPress: () => resolve(candidate),
+                })),
+                {
+                  text: "Cancel",
+                  style: "cancel" as const,
+                  onPress: () => resolve(null),
+                },
+              ],
+            );
+          });
+          if (!selected) throw new Error("CANCELLED");
+          src = selected;
         } else {
-          // Maybe they picked the backup_manga_nest_XXX folder directly
-          src = restoreDir;
+          src = candidates[0];
         }
       }
 
-      if (!src.exists) {
+      const items = src.list();
+      const mangaItem = items.find(
+        (item): item is Directory =>
+          isDir(item) && item.name.toLowerCase() === MANGA_PATH.toLowerCase(),
+      );
+      const sqliteItem = items.find(
+        (item): item is Directory =>
+          isDir(item) && item.name.toLowerCase() === SQLITE_PATH.toLowerCase(),
+      );
+      if (!mangaItem || !sqliteItem) {
         throw new Error(
-          "Could not find a valid manga backup folder in your selection.",
+          "No valid backup folder found. Backup must contain manga/ and SQLite/library.db.",
         );
       }
-
-      const items = src.list();
-      if (!items.length) {
-        log("⚠️  Selected backup is empty.");
-        setRestore({ ...IDLE_OP, status: "done" });
-        return;
+      const dbItem = sqliteItem
+        .list()
+        .find(
+          (item): item is File =>
+            isFile(item) &&
+            item.name.toLowerCase() === SQLITE_FILE.toLowerCase(),
+        );
+      if (!dbItem) {
+        throw new Error("No valid SQLite/library.db found in this backup.");
       }
+      const mangaItems = mangaItem
+        .list()
+        .filter((item): item is Directory => isDir(item));
+      const restoreTotal = mangaItems.length + 1;
 
       const dest = new Directory(Paths.document, MANGA_PATH);
       if (dest.exists) {
@@ -220,32 +341,37 @@ export default function BackupRestore() {
         await new Promise((r) => setTimeout(r, 100));
       }
       dest.create();
-
-      for (let i = 0; i < items.length; i++) {
+      for (let i = 0; i < mangaItems.length; i++) {
         if (cancelRef.current) throw new Error("CANCELLED");
-        const item = items[i];
-
-        if (item.name === ".nomedia") continue;
-
+        const mangaFolder = mangaItems[i];
         setRestore({
           status: "running",
           current: i + 1,
-          total: items.length - 1,
-          message: item.name,
+          total: restoreTotal,
+          message: `${MANGA_PATH}/${mangaFolder.name}`,
         });
-        log(`[${i + 1}/${items.length - 1}] 🔄 ${item.name}`);
-
-        const target = isDir(item)
-          ? new Directory(dest, item.name)
-          : new File(dest, item.name);
-        await item.copy(target);
+        log(
+          `[${i + 1}/${restoreTotal}] 🔄 ${MANGA_PATH}/${mangaFolder.name}`,
+        );
+        await mangaFolder.copy(dest);
       }
+
+      if (cancelRef.current) throw new Error("CANCELLED");
+      setRestore({
+        status: "running",
+        current: restoreTotal,
+        total: restoreTotal,
+        message: `${SQLITE_PATH}/${SQLITE_FILE}`,
+      });
+      log(`[${restoreTotal}/${restoreTotal}] 🔄 ${SQLITE_PATH}/${SQLITE_FILE}`);
+      await restoreSerializedDatabase(await dbItem.bytes());
+      log("💾 SQLite library database restored.");
 
       log("🎉 Restore complete! Restart the app to reload your library.");
       setRestore({
         status: "done",
-        current: items.length,
-        total: items.length,
+        current: restoreTotal,
+        total: restoreTotal,
         message: "Complete",
       });
     } catch (e: any) {
@@ -256,12 +382,6 @@ export default function BackupRestore() {
   };
 
   // ── Render helpers ────────────────────────────────────────────────────────
-
-  const StatusDot = ({ color }: { color: string }) => (
-    <View
-      style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: color }}
-    />
-  );
 
   const globalStatus = isBusy
     ? backup.status === "running"
@@ -285,7 +405,7 @@ export default function BackupRestore() {
             : "#475569";
 
   return (
-    <View style={{ flex: 1, backgroundColor: "#050a14" }}>
+    <Animated.View entering={FadeIn.duration(280)} style={[{ flex: 1, backgroundColor: "#050a14" }, tabAnimation]}>
       <StatusBar barStyle="light-content" />
 
       <ScrollView
@@ -294,58 +414,36 @@ export default function BackupRestore() {
         showsVerticalScrollIndicator={false}
       >
         {/* ── HEADER ── */}
-        <View
+        <Animated.View
+          entering={FadeInDown.delay(80).duration(360)}
           style={{
             paddingTop: 64,
-            paddingHorizontal: 24,
-            paddingBottom: 32,
+            paddingHorizontal: 20,
+            paddingBottom: 24,
+            marginBottom: 12,
             borderBottomWidth: 1,
             borderBottomColor: "#0f1f35",
           }}
         >
-          <View
-            style={{
-              flexDirection: "row",
-              justifyContent: "space-between",
-              alignItems: "flex-start",
-              marginBottom: 20,
-            }}
+          <View style={styles.backupHero}
           >
-            <View>
-              <View style={{ flexDirection: "row" }}>
-                <Text
-                  style={{
-                    fontSize: 16,
-                    fontWeight: "bold",
-                    color: "white",
-                    letterSpacing: 4,
-                    marginBottom: 6,
-                  }}
-                >
-                  Manga
-                </Text>
-                <Text
-                  style={{
-                    fontSize: 16,
-                    fontWeight: "bold",
-                    color: "#38D926",
-                    letterSpacing: 4,
-                    marginBottom: 6,
-                  }}
-                >
-                  Nest
-                </Text>
-              </View>
+            <View style={styles.backupHeroIcon}>
+              <MaterialCommunityIcons name="database-sync-outline" size={28} color="#38D926" />
+            </View>
+            <View style={{ flex: 1 }}>
               <Text
                 style={{
-                  fontSize: 30,
+                  fontSize: 28,
                   fontWeight: "900",
                   color: "#f1f5f9",
-                  letterSpacing: -1,
+                  letterSpacing: -0.5,
                 }}
               >
-                {" "}
-                Data Sync
+                Backup
+              </Text>
+              <Text style={{ fontSize: 13, fontWeight: "700", color: "#38D926", marginTop: 2 }}>
+                <Text style={{ color: "#f1f5f9" }}>Manga</Text>
+                <Text style={{ color: "#38D926" }}>Nest</Text>
               </Text>
             </View>
 
@@ -389,9 +487,10 @@ export default function BackupRestore() {
               borderRadius: 14,
               paddingVertical: 12,
               paddingHorizontal: 16,
+              marginTop: 16,
             }}
           >
-            <Text style={{ fontSize: 14 }}>🔎</Text>
+            <MaterialCommunityIcons name="folder-search-outline" size={18} color="#38D926" />
             <Text
               style={{
                 fontSize: 11,
@@ -404,14 +503,33 @@ export default function BackupRestore() {
               Inspect Internal Storage
             </Text>
           </TouchableOpacity>
-        </View>
+          <View style={styles.backupSummary}>
+            <View style={styles.summaryItem}>
+              <MaterialCommunityIcons name="database-outline" size={16} color="#38D926" />
+              <Text style={styles.summaryValue}>SQLite</Text>
+              <Text style={styles.summaryLabel}>metadata</Text>
+            </View>
+            <View style={styles.summaryDivider} />
+            <View style={styles.summaryItem}>
+              <MaterialCommunityIcons name="folder-multiple-outline" size={16} color="#60a5fa" />
+              <Text style={styles.summaryValue}>Manga</Text>
+              <Text style={styles.summaryLabel}>files</Text>
+            </View>
+            <View style={styles.summaryDivider} />
+            <View style={styles.summaryItem}>
+              <MaterialCommunityIcons name="shield-check-outline" size={16} color="#a78bfa" />
+              <Text style={styles.summaryValue}>Safe</Text>
+              <Text style={styles.summaryLabel}>restore</Text>
+            </View>
+          </View>
+        </Animated.View>
 
-        <View style={{ paddingHorizontal: 20, paddingTop: 28, gap: 14 }}>
+        <Animated.View entering={FadeInDown.delay(160).duration(420)} style={{ paddingHorizontal: 20, paddingTop: 28, gap: 14 }}>
           {/* ── BACKUP CARD ── */}
           <OperationCard
             title="Backup Library"
             subtitle="Export · Save to storage"
-            emoji="📦"
+            icon="cloud-upload-outline"
             accentColor="#38D926"
             darkBg="#050e08"
             borderColor="#12301a"
@@ -436,7 +554,7 @@ export default function BackupRestore() {
           <OperationCard
             title="Restore Library"
             subtitle="Import · Load from backup"
-            emoji="🔄"
+            icon="cloud-download-outline"
             accentColor="#60a5fa"
             darkBg="#050810"
             borderColor="#0f1f38"
@@ -459,10 +577,10 @@ export default function BackupRestore() {
           />
 
           {/* ── CONSOLE ── */}
-          <LogConsole logs={logs} loading={isBusy} />
-        </View>
+          <LogConsole logs={logs} loading={isBusy} onClear={clearLogs} />
+        </Animated.View>
       </ScrollView>
-    </View>
+    </Animated.View>
   );
 }
 
@@ -471,7 +589,7 @@ export default function BackupRestore() {
 interface CardProps {
   title: string;
   subtitle: string;
-  emoji: string;
+  icon: string;
   accentColor: string;
   darkBg: string;
   borderColor: string;
@@ -492,7 +610,7 @@ interface CardProps {
 function OperationCard({
   title,
   subtitle,
-  emoji,
+  icon,
   accentColor,
   darkBg,
   borderColor,
@@ -515,10 +633,10 @@ function OperationCard({
   const hasDir = !!dirUri;
 
   const btnDisabled = isBusy || !hasDir;
-  const btnColor = btnDisabled ? "#060f08" : accentColor;
-  const btnBorder = btnDisabled ? "#0f2a18" : accentColor;
+  const btnColor = btnDisabled ? "#172033" : accentColor;
+  const btnBorder = btnDisabled ? "#293852" : accentColor;
   const btnText = btnDisabled
-    ? "#1a4a24"
+    ? "#718096"
     : accentColor === "#38D926"
       ? "#030712"
       : "#ffffff";
@@ -559,7 +677,7 @@ function OperationCard({
               justifyContent: "center",
             }}
           >
-            <Text style={{ fontSize: 18 }}>{emoji}</Text>
+            <MaterialCommunityIcons name={icon as any} size={22} color={accentColor} />
           </View>
           <View>
             <Text
@@ -668,16 +786,27 @@ function OperationCard({
         }}
       />
 
-      <View style={{ padding: 16, gap: 10 }}>
-        {/* Dir picker */}
+      <View style={{ padding: 16, gap: 12 }}>
+        <Text
+          style={{
+            fontSize: 10,
+            fontWeight: "900",
+            color: "#64748b",
+            letterSpacing: 1.5,
+            textTransform: "uppercase",
+          }}
+        >
+          1. Choose a folder
+        </Text>
+
         <TouchableOpacity
           onPress={onPickDir}
           disabled={isBusy}
           activeOpacity={0.7}
           style={{
-            backgroundColor: hasDir ? "#061510" : "#040a06",
+            backgroundColor: hasDir ? "#061510" : "#0a1220",
             borderWidth: 1,
-            borderColor: hasDir ? "#1f5a28" : "#0c1f10",
+            borderColor: hasDir ? "#1f5a28" : "#263650",
             borderRadius: 13,
             padding: 14,
             flexDirection: "row",
@@ -690,9 +819,9 @@ function OperationCard({
               width: 32,
               height: 32,
               borderRadius: 9,
-              backgroundColor: hasDir ? "#0d2a12" : "#060f08",
+              backgroundColor: hasDir ? "#0d2a12" : "#111d31",
               borderWidth: 1,
-              borderColor: hasDir ? "#1a4a22" : "#0c1f10",
+              borderColor: hasDir ? "#1a4a22" : "#263650",
               alignItems: "center",
               justifyContent: "center",
             }}
@@ -704,7 +833,7 @@ function OperationCard({
               style={{
                 fontSize: 9,
                 fontWeight: "800",
-                color: "#2a5a32",
+                color: "#94a3b8",
                 letterSpacing: 2,
                 textTransform: "uppercase",
                 marginBottom: 3,
@@ -717,7 +846,7 @@ function OperationCard({
               style={{
                 fontSize: 11,
                 fontWeight: "600",
-                color: hasDir ? "#86efac" : "#1f3a26",
+                color: hasDir ? "#86efac" : "#64748b",
               }}
             >
               {hasDir ? formatPath(dirUri!) : dirPlaceholder}
@@ -741,9 +870,22 @@ function OperationCard({
               </Text>
             </View>
           ) : (
-            <Text style={{ fontSize: 16, color: "#1a3a20" }}>›</Text>
+            <Text style={{ fontSize: 16, color: "#94a3b8" }}>›</Text>
           )}
         </TouchableOpacity>
+
+        <Text
+          style={{
+            fontSize: 10,
+            fontWeight: "900",
+            color: "#64748b",
+            letterSpacing: 1.5,
+            textTransform: "uppercase",
+            marginTop: 2,
+          }}
+        >
+          2. {isRunning ? "Working…" : "Start"}
+        </Text>
 
         {/* Progress bar — only shown for THIS card when running */}
         {isRunning && op.total > 0 && (
@@ -788,7 +930,6 @@ function OperationCard({
           </View>
         )}
 
-        {/* Action button + abort */}
         <View style={{ flexDirection: "row", gap: 8 }}>
           <TouchableOpacity
             onPress={onStart}
@@ -816,7 +957,7 @@ function OperationCard({
                 color: btnText,
               }}
             >
-              {actionLabel}
+              {hasDir ? actionLabel : "CHOOSE A FOLDER FIRST"}
             </Text>
           </TouchableOpacity>
 

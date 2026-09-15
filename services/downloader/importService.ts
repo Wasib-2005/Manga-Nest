@@ -4,7 +4,7 @@
  * Stores imported manga in the SAME structure as downloader.ts:
  *   Paths.document/manga/{uid}/{ep}/
  *
- * Uses the same index.json registry so the library screen finds imports.
+ * Uses the same SQLite library database so the library screen finds imports.
  * 
  * PDF read: legacy copyAsync (content:// → cache) then legacy readAsStringAsync
  * Everything else: new expo-file-system API matching downloader.ts exactly
@@ -13,7 +13,13 @@
 import * as DocumentPicker from "expo-document-picker";
 import * as ImagePicker from "expo-image-picker";
 import * as FileSystemLegacy from "expo-file-system/legacy";
-import { Directory, File, Paths } from "expo-file-system";
+import { Directory, Paths } from "expo-file-system";
+import {
+  createManga,
+  findMangaByName,
+  updateManga,
+  upsertChapter,
+} from "../reader/database";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -36,15 +42,6 @@ export interface ChapterDir {
   delete: () => void;
 }
 
-// ─── Index types (mirrors downloader.ts) ─────────────────────────────────────
-
-interface IndexEntry {
-  uid: string;
-  name: string;
-  source: string;
-  addedAt: string;
-}
-
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 export function slugify(name: string): string {
@@ -63,60 +60,12 @@ function generateUid(): string {
   ).join("");
 }
 
-function uniqueUid(existing: IndexEntry[]): string {
-  const taken = new Set(existing.map((e) => e.uid));
-  let uid: string;
-  do { uid = generateUid(); } while (taken.has(uid));
-  return uid;
-}
-
 // ─── Get manga root (same as downloader.ts) ───────────────────────────────────
 
 function getMangaRoot(): Directory {
   const root = new Directory(Paths.document, "manga");
   if (!root.exists) root.create({ intermediates: true });
   return root;
-}
-
-// ─── Index read/write (mirrors downloader.ts exactly) ────────────────────────
-
-async function readIndex(root: Directory): Promise<IndexEntry[]> {
-  try {
-    const f = new File(`${root.uri}/index.json`);
-    if (!f.exists) return [];
-    const parsed = JSON.parse(await f.text());
-    if (!Array.isArray(parsed)) throw new Error("not an array");
-    return parsed.filter((e: IndexEntry) => {
-      try { return new Directory(root, e.uid).exists; } catch { return false; }
-    });
-  } catch (err) {
-    console.warn("⚠️ index.json unreadable — rebuilding:", err);
-    return rebuildIndex(root);
-  }
-}
-
-async function rebuildIndex(root: Directory): Promise<IndexEntry[]> {
-  const entries: IndexEntry[] = [];
-  try {
-    for (const item of root.list()) {
-      if (!(item instanceof Directory)) continue;
-      try {
-        const f = new File(`${item.uri}/title.json`);
-        if (!f.exists) continue;
-        const data: IndexEntry = JSON.parse(await f.text());
-        if (data.uid && data.name && data.source) entries.push(data);
-      } catch { /* skip */ }
-    }
-  } catch { /* root not yet created */ }
-  return entries;
-}
-
-async function writeIndex(root: Directory, entries: IndexEntry[]): Promise<void> {
-  const tmp = new File(`${root.uri}/index.json.tmp`);
-  const real = new File(`${root.uri}/index.json`);
-  await tmp.write(JSON.stringify(entries, null, 2));
-  if (real.exists) real.delete();
-  await tmp.move(real);
 }
 
 // ─── Lock (mirrors downloader.ts) ────────────────────────────────────────────
@@ -191,23 +140,23 @@ export async function resolveOrCreateEntry(
   const canonicalName = titleName.trim();
 
   const uid = await withLock(async () => {
-    const entries = await readIndex(root);
-    const normName = canonicalName.toLowerCase();
-    const existing = entries.find((e) => e.name.toLowerCase() === normName);
+    const existing = await findMangaByName(canonicalName);
 
     if (existing) {
       // Title already exists — reuse uid, just add a new chapter
       return existing.uid;
     }
 
-    const newUid = uniqueUid(entries);
-    entries.push({
+    const newUid = generateUid();
+    await createManga({
       uid: newUid,
       name: canonicalName,
+      author: "",
       source: "local",
+      tags: [],
+      genres: [],
       addedAt: new Date().toISOString(),
     });
-    await writeIndex(root, entries);
     return newUid;
   });
 
@@ -230,59 +179,32 @@ export async function resolveOrCreateEntry(
   return { uid, titleDir, mkChapterDir };
 }
 
-// ─── Write title.json (same format as downloader.ts) ─────────────────────────
-
-export async function writeTitleJson(
+export async function writeTitleMetadata(
   titleDir: Directory,
   uid: string,
   meta: ImportMeta,
   source: "pdf" | "images",
 ): Promise<void> {
-  const f = new File(`${titleDir.uri}/title.json`);
-  await f.write(
-    JSON.stringify(
-      {
-        uid,
-        name: meta.name.trim(),
-        author: meta.author.trim(),
-        tags: meta.tags.split(",").map((t) => t.trim()).filter(Boolean),
-        genres: meta.genres.split(",").map((g) => g.trim()).filter(Boolean),
-        source,
-        addedAt: new Date().toISOString(),
-      },
-      null,
-      2,
-    ),
+  void titleDir;
+  await updateManga(
+    uid,
+    { name: meta.name.trim(), author: meta.author.trim() },
+    meta.tags.split(",").map((t) => t.trim()).filter(Boolean),
+    meta.genres.split(",").map((g) => g.trim()).filter(Boolean),
   );
+  void source;
 }
 
-// ─── Write info.json (same format as downloader.ts) ──────────────────────────
-
-export async function writeInfoJson(
+export async function writeChapterMetadata(
   chapterDir: ChapterDir,
   uid: string,
   meta: ImportMeta,
   source: "pdf" | "images",
   pageCount: number,
 ): Promise<void> {
-  const f = new File(`${chapterDir.uri}/info.json`);
-  await f.write(
-    JSON.stringify(
-      {
-        uid,
-        name: meta.name.trim(),
-        author: meta.author.trim(),
-        tags: meta.tags.split(",").map((t) => t.trim()).filter(Boolean),
-        genres: meta.genres.split(",").map((g) => g.trim()).filter(Boolean),
-        ep: meta.ep.trim(),
-        source,
-        pages: pageCount,
-        savedAt: new Date().toISOString(),
-      },
-      null,
-      2,
-    ),
-  );
+  void chapterDir;
+  await upsertChapter(uid, meta.ep.trim(), pageCount, new Date().toISOString());
+  void source;
 }
 
 // ─── Save one PDF page ────────────────────────────────────────────────────────
@@ -326,7 +248,7 @@ export async function importFromImages(
     "images",
   );
 
-  await writeTitleJson(titleDir, uid, meta, "images");
+  await writeTitleMetadata(titleDir, uid, meta, "images");
 
   const chapterDir = await mkChapterDir(meta.ep.trim());
   const total = uris.length;
@@ -353,6 +275,6 @@ export async function importFromImages(
     onProgress({ message: `Copied ${page} / ${total}`, current: page, total });
   }
 
-  await writeInfoJson(chapterDir, uid, meta, "images", total);
+  await writeChapterMetadata(chapterDir, uid, meta, "images", total);
   return chapterDir.uri;
 }

@@ -19,14 +19,15 @@ import {
 import { TouchableOpacity } from "react-native";
 import { useEffect } from "react";
 import type { ViewMode } from "../../components/ui/reader/pageViewer";
+import { useTabTransition } from "../../components/ui/navigation/tabTransitionContext";
 
 type Screen = "library" | "reader";
 
 export default function Index() {
+  const { setTabBarHidden } = useTabTransition();
   const [screen, setScreen] = useState<Screen>("library");
   const [selectedManga, setSelectedManga] = useState<MangaEntry | null>(null);
   const [selectedChapter, setSelectedChapter] = useState("");
-  console.log("asdadfghfdhjdrtyyje",selectedChapter);
   const [pages, setPages] = useState<string[]>([]);
   const [initialPage, setInitialPage] = useState(0);
   const [currentPage, setCurrentPage] = useState(0);
@@ -119,6 +120,10 @@ export default function Index() {
     // so if user reopens same chapter it's instant
   }, [selectedManga, selectedChapter, pages.length]);
 
+  const handleChapterFinished = useCallback(() => {
+    handleBack();
+  }, [handleBack]);
+
   // ── Deletion (these DO need a library refresh) ────────────────────────────
   const onDeleteChapter = useCallback(
     async (uid: string, ep: string) => {
@@ -180,6 +185,10 @@ export default function Index() {
     return () => sub.remove();
   }, [screen, handleBack]);
 
+  useEffect(() => {
+    setTabBarHidden(screen === "reader");
+  }, [screen, setTabBarHidden]);
+
   return (
     <View style={{ flex: 1 }}>
       {/* ── Library (always mounted, just hidden when reading) ── */}
@@ -235,6 +244,7 @@ export default function Index() {
             onSpeedChange={setAutoPlaySpeed}
             onClose={handleBack}
             onPageChange={handlePageChange}
+            onFinish={handleChapterFinished}
             
           />
           <HiddenMangaModal

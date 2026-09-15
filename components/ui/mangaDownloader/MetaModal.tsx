@@ -42,6 +42,7 @@ function useCoverImage(meta: MangaMeta | null): string | null {
 
     // Fallback: try to fetch og:image from the source URL
     if (!meta.scanUrl) return;
+    const scanUrl = meta.scanUrl;
     let cancelled = false;
 
     (async () => {
@@ -50,7 +51,7 @@ function useCoverImage(meta: MangaMeta | null): string | null {
       //   "doesn't have direct image URLs, attempting to scrape cover from page…",
       // );
       try {
-        const res = await fetch(meta.scanUrl, {
+        const res = await fetch(scanUrl, {
           headers: { "User-Agent": "Mozilla/5.0" },
         });
         // console.log("Page fetch status:", res);
@@ -243,18 +244,21 @@ export const MetaModal = ({
 
   const handleFormatTags = () => {
     if (!edited.tags) return;
-    let clean = edited.tags
-      .toLowerCase()
-      .replace(/\btag:\s*/g, "")
-      .replace(/\btag\s+/g, " ")
-      .replace(/\b\d+(\.\d+)?[a-z]*\b/g, "");
-    const words = clean.match(/[a-z]+(-[a-z]+)*/g);
-    if (words) {
-      const unique = Array.from(new Set(words)).filter((t) => t.length > 1);
-      onChange("tags")(unique.join(", "));
-    } else {
-      onChange("tags")("");
-    }
+    const formatted = edited.tags
+      .replace(/\b\d+(?:\.\d+)?\s*(?=[a-z])/gi, ", ")
+      .split(",")
+      .map((tag) =>
+        tag
+          .toLowerCase()
+          .replace(/\btag:\s*/g, "")
+          .replace(/\btag\s+/g, " ")
+          .replace(/\(\s*\d+(?:\.\d+)?\s*\)/g, "")
+          .replace(/\s+\d+(?:\.\d+)?[a-z]*\s*$/g, "")
+          .replace(/\s+/g, " ")
+          .trim(),
+      )
+      .filter((tag, index, tags) => tag.length > 1 && tags.indexOf(tag) === index);
+    onChange("tags")(formatted.join(", "));
   };
 
   const handleAction = () => {
@@ -288,7 +292,8 @@ export const MetaModal = ({
     >
       <View style={s.backdrop}>
         <KeyboardAvoidingView
-          behavior={Platform.OS === "ios" ? "padding" : undefined}
+          behavior={Platform.OS === "ios" ? "padding" : "height"}
+          keyboardVerticalOffset={Platform.OS === "ios" ? 8 : 0}
           style={{ width: "100%" }}
         >
           <View style={s.sheet}>
@@ -312,7 +317,8 @@ export const MetaModal = ({
                 </View>
                 <View>
                   <Text style={s.headerTitle}>
-                    Manga <Text style={{ color: "#38D926" }}>Nest</Text>
+                    <Text style={{ color: "#f1f5f9" }}>Manga</Text>
+                    <Text style={{ color: "#38D926" }}>Nest</Text>
                   </Text>
                   <Text style={s.headerSub}>Metadata Verification</Text>
                 </View>

@@ -1,4 +1,4 @@
-import React, { useRef, useState } from "react";
+import React, { useRef, useState, useEffect, useCallback } from "react";
 import {
   View,
   Text,
@@ -12,6 +12,10 @@ import {
   Modal,
   ActivityIndicator,
   TextInput, // <-- Added TextInput here
+  BackHandler,
+  Image,
+  Switch,
+  Alert,
 } from "react-native";
 import { WebView } from "react-native-webview";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
@@ -30,6 +34,9 @@ import type {
   DownloadProgress,
 } from "../../services/downloader/types/manga";
 import { ImportModal } from "@/components/ui/mangaDownloader/ImportModal";
+import Animated from "react-native-reanimated";
+import { useTabScreenAnimation } from "../../components/ui/navigation/tabTransitionContext";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 
 // ─── Types & Configuration ──────────────────────────────────────────────────
 
@@ -51,6 +58,19 @@ interface QueueItem {
   meta?: MangaMeta;
   edited?: EditedMeta;
 }
+
+interface CapturedImage {
+  id: string;
+  uri: string;
+  selected: boolean;
+}
+
+interface CapturedUrl {
+  url: string;
+  selected: boolean;
+}
+
+const BROWSER_AD_BLOCKER_KEY = "in_app_browser_ad_blocker";
 
 const EMPTY_EDITED: EditedMeta = {
   name: "",
@@ -221,6 +241,7 @@ const q = StyleSheet.create({
 // ─── Main Screen ──────────────────────────────────────────────────────────────
 
 export default function Downloader() {
+  const tabAnimation = useTabScreenAnimation("downloader");
   const [urlInput, setUrlInput] = useState("");
   const [queue, setQueue] = useState<QueueItem[]>([]);
   const [progress, setProgress] = useState<DownloadProgress>({
@@ -245,6 +266,12 @@ export default function Downloader() {
   const [canGoBack, setCanGoBack] = useState(false);
   const [canGoForward, setCanGoForward] = useState(false);
   const [browserLoading, setBrowserLoading] = useState(false);
+  const [adBlockerEnabled, setAdBlockerEnabled] = useState(false);
+  const [capturedImages, setCapturedImages] = useState<CapturedImage[]>([]);
+  const [capturedUrls, setCapturedUrls] = useState<CapturedUrl[]>([]);
+  const [captureOpen, setCaptureOpen] = useState(false);
+  const captureChunksRef = useRef<Record<string, string[]>>({});
+  const pendingNavigationRef = useRef<string | null>(null);
 
   const webViewRef = useRef<WebView>(null);
   const cancelRef = useRef({ cancelled: false });
@@ -401,10 +428,137 @@ export default function Downloader() {
   const handleBrowserBack = () => canGoBack && webViewRef.current?.goBack();
   const handleBrowserForward = () => canGoForward && webViewRef.current?.goForward();
   const handleBrowserReload = () => webViewRef.current?.reload();
+
+  useEffect(() => {
+    AsyncStorage.getItem(BROWSER_AD_BLOCKER_KEY).then((value) => {
+      if (value === "true") setAdBlockerEnabled(true);
+    });
+  }, []);
+
+  const handleAdBlockerChange = (enabled: boolean) => {
+    setAdBlockerEnabled(enabled);
+    void AsyncStorage.setItem(BROWSER_AD_BLOCKER_KEY, String(enabled));
+    webViewRef.current?.injectJavaScript(enabled ? AD_BLOCKER_JAVASCRIPT : DISABLE_AD_BLOCKER_JAVASCRIPT);
+  };
+
+  const handleBrowserSystemBack = useCallback(() => {
+    if (!browserVisible) return false;
+    if (canGoBack) {
+      webViewRef.current?.goBack();
+    } else {
+      setBrowserVisible(false);
+    }
+    return true;
+  }, [browserVisible, canGoBack]);
+
+  useEffect(() => {
+    const subscription = BackHandler.addEventListener(
+      "hardwareBackPress",
+      handleBrowserSystemBack,
+    );
+    return () => subscription.remove();
+  }, [handleBrowserSystemBack]);
   
   const handleCaptureUrl = () => {
-    handleAddUrlDirect(browserUrl);
+    captureChunksRef.current = {};
+    setCapturedImages([]);
+    setCapturedUrls([]);
+    webViewRef.current?.injectJavaScript(CAPTURE_IMAGES_JAVASCRIPT);
+  };
+
+  const confirmNewTabNavigation = useCallback((url: string) => {
+    if (!/^https?:\/\//i.test(url)) return;
+    pendingNavigationRef.current = url;
+    Alert.alert("Open link?", url, [
+      { text: "Cancel", style: "cancel", onPress: () => { pendingNavigationRef.current = null; } },
+      {
+        text: "Open",
+        onPress: () => {
+          const target = pendingNavigationRef.current;
+          pendingNavigationRef.current = null;
+          if (target) {
+            setBrowserUrl(target);
+            setBrowserInput(target);
+          }
+        },
+      },
+    ]);
+  }, []);
+
+  const handleCapturedMessage = (event: { nativeEvent: { data: string } }) => {
+    try {
+      const payload = JSON.parse(event.nativeEvent.data);
+      if (payload.type === "MANGA_NEST_IMAGE_CHUNK") {
+        const chunks = captureChunksRef.current[payload.id] || [];
+        chunks[payload.index] = payload.chunk;
+        captureChunksRef.current[payload.id] = chunks;
+        return;
+      }
+      if (payload.type === "MANGA_NEST_IMAGE_END") {
+        const chunks = captureChunksRef.current[payload.id];
+        if (!chunks) return;
+        const uri = chunks.join("");
+        delete captureChunksRef.current[payload.id];
+        setCapturedImages((current) => [
+          ...current,
+          { id: payload.id, uri, selected: true },
+        ]);
+        return;
+      }
+      if (payload.type === "MANGA_NEST_URLS") {
+        const urls = (payload.urls as string[])
+          .filter((url) => /^https?:\/\//i.test(url))
+          .map((url) => ({ url, selected: true }));
+        setCapturedUrls(urls);
+        setCaptureOpen(true);
+        return;
+      }
+      if (payload.type === "MANGA_NEST_NAVIGATION_REQUEST") {
+        confirmNewTabNavigation(payload.url);
+        return;
+      }
+      if (payload.type !== "MANGA_NEST_IMAGES") return;
+      const images = (payload.images as string[])
+        .filter((uri) => uri.startsWith("http://") || uri.startsWith("https://") || uri.startsWith("data:image/"))
+        .map((uri, index) => ({ id: `url-${index}-${uri.slice(0, 24)}`, uri, selected: true }));
+      setCapturedImages((current) => [
+        ...current,
+        ...images.filter((image) => !current.some((item) => item.uri === image.uri)),
+      ]);
+      setCaptureOpen(true);
+    } catch {
+      log("Could not read captured images from this page.");
+    }
+  };
+
+  const openCapturedUrls = () => {
+    capturedUrls
+      .filter((item) => item.selected)
+      .forEach((item) => handleAddUrlDirect(item.url));
+    setCaptureOpen(false);
+  };
+
+  const openCapturedMetadata = () => {
+    const imageUrls = capturedImages.filter((image) => image.selected).map((image) => image.uri);
+    if (imageUrls.length === 0) return;
+    const id = genId();
+    const meta: MangaMeta = {
+      name: "",
+      author: "",
+      tags: [],
+      genres: [],
+      ep: "",
+      source: "local",
+      imageUrls,
+      scanUrl: browserUrl,
+    };
+    syncQueue([...queueRef.current, { id, url: browserUrl, status: "review", meta, edited: EMPTY_EDITED }]);
+    setModalItemId(id);
+    setModalMeta(meta);
+    setModalEdited(EMPTY_EDITED);
+    setCaptureOpen(false);
     setBrowserVisible(false);
+    setModalOpen(true);
   };
 
   // <-- Added logic to process typed URL
@@ -428,7 +582,16 @@ export default function Downloader() {
     (function() {
       const removeTargetBlank = () => {
         document.querySelectorAll('a[target="_blank"]').forEach(a => {
-          a.removeAttribute('target');
+          if (a.__mangaNestIntercepted) return;
+          a.__mangaNestIntercepted = true;
+          a.addEventListener('click', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            window.ReactNativeWebView.postMessage(JSON.stringify({
+              type: 'MANGA_NEST_NAVIGATION_REQUEST',
+              url: a.href
+            }));
+          }, true);
         });
       };
       // Run once on load
@@ -437,11 +600,183 @@ export default function Downloader() {
       // Watch for new DOM elements (e.g. lazy-loaded links or infinite scroll)
       const observer = new MutationObserver(removeTargetBlank);
       observer.observe(document.body, { childList: true, subtree: true });
+      const originalOpen = window.open;
+      window.open = function(url) {
+        if (url) {
+          window.ReactNativeWebView.postMessage(JSON.stringify({
+            type: 'MANGA_NEST_NAVIGATION_REQUEST',
+            url: String(url)
+          }));
+        }
+        return null;
+      };
+      window.__MANGA_NEST_ORIGINAL_OPEN = originalOpen;
+    })();
+    true;
+  `;
+
+  const AD_BLOCKER_JAVASCRIPT = `
+    (function() {
+      window.__MANGA_NEST_AD_BLOCKER = true;
+      const selectors = [
+        '[id*="ad-"]', '[id*="ads-"]', '[id*="advert"]',
+        '[class*="ad-"]', '[class*="ads-"]', '[class*="advert"]',
+        'iframe[src*="doubleclick"]', 'iframe[src*="googlesyndication"]',
+        'iframe[src*="adservice"]', '[data-ad-slot]'
+      ];
+      const removeAds = () => {
+        document.querySelectorAll(selectors.join(',')).forEach((element) => {
+          if (!element.closest('img, picture, figure')) element.remove();
+        });
+      };
+      window.open = () => null;
+      removeAds();
+      if (!window.__MANGA_NEST_AD_OBSERVER) {
+        window.__MANGA_NEST_AD_OBSERVER = new MutationObserver(removeAds);
+        window.__MANGA_NEST_AD_OBSERVER.observe(document.documentElement, { childList: true, subtree: true });
+      }
+    })();
+    true;
+  `;
+
+  const DISABLE_AD_BLOCKER_JAVASCRIPT = `
+    (function() {
+      window.__MANGA_NEST_AD_BLOCKER = false;
+      if (window.__MANGA_NEST_AD_OBSERVER) {
+        window.__MANGA_NEST_AD_OBSERVER.disconnect();
+        window.__MANGA_NEST_AD_OBSERVER = null;
+      }
+    })();
+    true;
+  `;
+
+  const CAPTURE_IMAGES_JAVASCRIPT = `
+    (async function() {
+      const candidates = [];
+      const pageUrls = [window.location.href];
+      document.querySelectorAll('a[href]').forEach((anchor) => {
+        if (anchor.href) pageUrls.push(anchor.href);
+      });
+      const add = (value) => {
+        if (typeof value === 'string' && value) candidates.push(value);
+      };
+      document.querySelectorAll('img, source, video, [src], [data-src], [data-original], [data-lazy-src]').forEach((element) => {
+        add(element.currentSrc);
+        add(element.src);
+        add(element.getAttribute('src'));
+        add(element.getAttribute('data-src'));
+        add(element.getAttribute('data-original'));
+        add(element.getAttribute('data-lazy-src'));
+        add(element.getAttribute('srcset')?.split(',')[0]?.trim()?.split(' ')[0]);
+      });
+      document.querySelectorAll('*').forEach((element) => {
+        const background = getComputedStyle(element).backgroundImage;
+        const match = background && background.match(/url\\(["']?([^"')]+)["']?\\)/);
+        if (match) add(match[1]);
+      });
+      performance.getEntriesByType('resource').forEach((entry) => add(entry.name));
+      (window.__MANGA_NEST_BLOBS || []).forEach((blob) => candidates.push(blob));
+      const unique = [...new Set(candidates)];
+      const resolved = [];
+      let blobIndex = 0;
+      for (const source of unique) {
+        if (source instanceof Blob) {
+          try {
+            const dataUrl = await new Promise((resolve, reject) => {
+              const reader = new FileReader();
+              reader.onloadend = () => resolve(reader.result);
+              reader.onerror = reject;
+              reader.readAsDataURL(source);
+            });
+            if (typeof dataUrl === 'string') {
+              const id = 'blob-' + (blobIndex++);
+              window.ReactNativeWebView.postMessage(JSON.stringify({
+                type: 'MANGA_NEST_IMAGE_START',
+                id
+              }));
+              const chunkSize = 90000;
+              for (let index = 0; index < dataUrl.length; index += chunkSize) {
+                window.ReactNativeWebView.postMessage(JSON.stringify({
+                  type: 'MANGA_NEST_IMAGE_CHUNK',
+                  id,
+                  index: Math.floor(index / chunkSize),
+                  chunk: dataUrl.slice(index, index + chunkSize)
+                }));
+              }
+              window.ReactNativeWebView.postMessage(JSON.stringify({
+                type: 'MANGA_NEST_IMAGE_END',
+                id
+              }));
+            }
+          } catch (_) {}
+          continue;
+        }
+        if (!source.startsWith('blob:')) {
+          resolved.push(source);
+          continue;
+        }
+        try {
+          const response = await fetch(source);
+          const blob = await response.blob();
+          const dataUrl = await new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onloadend = () => resolve(reader.result);
+            reader.onerror = reject;
+            reader.readAsDataURL(blob);
+          });
+          if (typeof dataUrl === 'string') {
+            const id = 'blob-' + (blobIndex++);
+            window.ReactNativeWebView.postMessage(JSON.stringify({
+              type: 'MANGA_NEST_IMAGE_START',
+              id
+            }));
+            const chunkSize = 90000;
+            for (let index = 0; index < dataUrl.length; index += chunkSize) {
+              window.ReactNativeWebView.postMessage(JSON.stringify({
+                type: 'MANGA_NEST_IMAGE_CHUNK',
+                id,
+                index: Math.floor(index / chunkSize),
+                chunk: dataUrl.slice(index, index + chunkSize)
+              }));
+            }
+            window.ReactNativeWebView.postMessage(JSON.stringify({
+              type: 'MANGA_NEST_IMAGE_END',
+              id
+            }));
+          }
+        } catch (_) {
+          if (source.startsWith('blob:')) continue;
+        }
+      }
+      window.ReactNativeWebView.postMessage(JSON.stringify({
+        type: 'MANGA_NEST_IMAGES',
+        images: resolved
+      }));
+      window.ReactNativeWebView.postMessage(JSON.stringify({
+        type: 'MANGA_NEST_URLS',
+        urls: [...new Set(pageUrls)]
+      }));
+    })();
+    true;
+  `;
+
+  const CAPTURE_BLOB_HOOK_JAVASCRIPT = `
+    (function() {
+      window.__MANGA_NEST_BLOBS = window.__MANGA_NEST_BLOBS || [];
+      if (!window.__MANGA_NEST_BLOB_HOOKED && window.URL && window.URL.createObjectURL) {
+        const originalCreateObjectURL = window.URL.createObjectURL.bind(window.URL);
+        window.URL.createObjectURL = function(blob) {
+          if (blob instanceof Blob) window.__MANGA_NEST_BLOBS.push(blob);
+          return originalCreateObjectURL(blob);
+        };
+        window.__MANGA_NEST_BLOB_HOOKED = true;
+      }
     })();
     true;
   `;
 
   return (
+    <Animated.View style={[{ flex: 1 }, tabAnimation]}>
     <KeyboardAvoidingView
       behavior={Platform.OS === "ios" ? "padding" : undefined}
       style={{ flex: 1 }}
@@ -453,25 +788,20 @@ export default function Downloader() {
         keyboardShouldPersistTaps="handled"
       >
         {/* ── HEADER ── */}
-        <View style={{ marginBottom: 28 }}>
-          <Text
-            style={{
-              fontSize: 14,
-              fontWeight: "600",
-              color: "#64748b",
-              textTransform: "uppercase",
-              letterSpacing: 1,
-            }}
-          >
-            Dashboard
-          </Text>
-          <View style={{ flexDirection: "row", alignItems: "center" }}>
-            <Text style={{ fontSize: 28, fontWeight: "900", color: "#f8fafc", letterSpacing: -0.5 }}>
-              Manga
+        <View style={styles.downloadHero}>
+          <View style={styles.heroIcon}>
+            <MaterialCommunityIcons name="cloud-download-outline" size={28} color="#38D926" />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.heroTitle}>Download</Text>
+            <Text style={styles.heroBrand}>
+              <Text style={{ color: "#f8fafc" }}>Manga</Text>
+              <Text style={{ color: "#38D926" }}>Nest</Text>
             </Text>
-            <Text style={{ fontSize: 28, fontWeight: "900", color: "#38D926", letterSpacing: -0.5 }}>
-              Nest
-            </Text>
+          </View>
+          <View style={styles.heroCount}>
+            <Text style={styles.heroCountValue}>{doneCount}</Text>
+            <Text style={styles.heroCountLabel}>DONE</Text>
           </View>
         </View>
 
@@ -480,13 +810,16 @@ export default function Downloader() {
           <View style={styles.sectionHeader}>
             <Text style={styles.sectionTitle}>Direct Download URL</Text>
           </View>
-          <UrlInput
-            value={urlInput}
-            onChange={setUrlInput}
-            onSubmit={handleAddUrl}
-            loading={false}
-            onCancel={() => {}}
-          />
+          <View style={styles.urlCard}>
+            <UrlInput
+              value={urlInput}
+              onChange={setUrlInput}
+              onSubmit={handleAddUrl}
+              loading={false}
+              onCancel={() => {}}
+            />
+            <Text style={styles.urlHint}>Paste a chapter URL or add several links to the queue.</Text>
+          </View>
         </View>
 
         {/* ── SECTION: IMPORT & BROWSER ── */}
@@ -616,7 +949,13 @@ export default function Downloader() {
                 />
               </View>
             </TouchableOpacity>
-            {logsOpen && <LogConsole logs={logs} loading={!!activeDownload} />}
+            {logsOpen && (
+              <LogConsole
+                logs={logs}
+                loading={!!activeDownload}
+                onClear={() => setLogs([])}
+              />
+            )}
           </View>
         )}
       </ScrollView>
@@ -625,7 +964,7 @@ export default function Downloader() {
       <Modal
         visible={browserVisible}
         animationType="slide"
-        onRequestClose={() => setBrowserVisible(false)}
+        onRequestClose={handleBrowserSystemBack}
       >
         <View style={styles.browserContainer}>
           {/* Top Control Header Bar */}
@@ -656,6 +995,19 @@ export default function Downloader() {
             {browserLoading && (
               <ActivityIndicator size="small" color="#38D926" style={{ marginRight: 4 }} />
             )}
+            <View style={styles.adBlockerControl}>
+              <MaterialCommunityIcons
+                name={adBlockerEnabled ? "shield-check" : "shield-off-outline"}
+                size={16}
+                color={adBlockerEnabled ? "#38D926" : "#64748b"}
+              />
+              <Switch
+                value={adBlockerEnabled}
+                onValueChange={handleAdBlockerChange}
+                trackColor={{ false: "#1e293b", true: "#38D92655" }}
+                thumbColor={adBlockerEnabled ? "#38D926" : "#64748b"}
+              />
+            </View>
           </View>
 
           {/* Actual Core WebView Engine Wrapper */}
@@ -663,7 +1015,9 @@ export default function Downloader() {
             <WebView
               ref={webViewRef}
               source={{ uri: browserUrl }}
-              injectedJavaScript={INJECTED_JAVASCRIPT} // <-- Strip out "_blank" links natively
+              injectedJavaScript={`${INJECTED_JAVASCRIPT}${adBlockerEnabled ? AD_BLOCKER_JAVASCRIPT : ""}`}
+              injectedJavaScriptBeforeContentLoaded={CAPTURE_BLOB_HOOK_JAVASCRIPT}
+              onMessage={handleCapturedMessage}
               setSupportMultipleWindows={false}        // <-- Deny popups natively 
               onNavigationStateChange={(navState) => {
                 // Sync internal input bar but DONT trigger a reload
@@ -711,10 +1065,88 @@ export default function Downloader() {
             </View>
 
             <TouchableOpacity onPress={handleCaptureUrl} style={styles.captureBtn}>
-              <MaterialCommunityIcons name="target" size={16} color="#030712" />
-              <Text style={styles.captureBtnText}>Capture URL</Text>
+              <MaterialCommunityIcons name="image-multiple" size={16} color="#030712" />
+              <Text style={styles.captureBtnText}>Capture Images</Text>
             </TouchableOpacity>
           </View>
+        </View>
+      </Modal>
+
+      <Modal visible={captureOpen} animationType="slide" onRequestClose={() => setCaptureOpen(false)}>
+        <View style={styles.captureContainer}>
+          <View style={styles.captureHeader}>
+            <View>
+              <Text style={styles.captureTitle}>Captured Content</Text>
+              <Text style={styles.captureSubtitle}>
+                {capturedImages.filter((image) => image.selected).length} images · {capturedUrls.filter((item) => item.selected).length} URLs selected
+              </Text>
+            </View>
+            <TouchableOpacity onPress={() => setCaptureOpen(false)} style={styles.browserHeaderClose}>
+              <MaterialCommunityIcons name="close" size={22} color="#f8fafc" />
+            </TouchableOpacity>
+          </View>
+          {capturedUrls.length > 0 && (
+            <View style={styles.capturedUrls}>
+              <Text style={styles.capturedUrlsTitle}>Page URLs</Text>
+              <ScrollView style={styles.capturedUrlsList} nestedScrollEnabled>
+                {capturedUrls.map((item) => (
+                  <TouchableOpacity
+                    key={item.url}
+                    onPress={() =>
+                      setCapturedUrls((current) =>
+                        current.map((entry) =>
+                          entry.url === item.url ? { ...entry, selected: !entry.selected } : entry,
+                        ),
+                      )
+                    }
+                    style={[styles.capturedUrlRow, !item.selected && styles.captureImageCardOff]}
+                  >
+                    <MaterialCommunityIcons
+                      name={item.selected ? "checkbox-marked" : "checkbox-blank-outline"}
+                      size={18}
+                      color={item.selected ? "#38D926" : "#475569"}
+                    />
+                    <Text style={styles.capturedUrlText} numberOfLines={1}>{item.url}</Text>
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+              <TouchableOpacity onPress={openCapturedUrls} style={styles.saveCapturedBtn}>
+                <MaterialCommunityIcons name="link-plus" size={18} color="#030712" />
+                <Text style={styles.captureBtnText}>Add Selected URLs</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+          <ScrollView contentContainerStyle={styles.captureGrid}>
+            {capturedImages.map((image) => (
+              <TouchableOpacity
+                key={image.id}
+                onPress={() =>
+                  setCapturedImages((current) =>
+                    current.map((item) =>
+                      item.id === image.id ? { ...item, selected: !item.selected } : item,
+                    ),
+                  )
+                }
+                style={[styles.captureImageCard, !image.selected && styles.captureImageCardOff]}
+              >
+                <Image source={{ uri: image.uri }} style={styles.captureImage} resizeMode="cover" />
+                <View style={[styles.captureCheck, image.selected && styles.captureCheckSelected]}>
+                  {image.selected && <MaterialCommunityIcons name="check" size={15} color="#030712" />}
+                </View>
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
+          <TouchableOpacity
+            onPress={openCapturedMetadata}
+            disabled={!capturedImages.some((image) => image.selected)}
+            style={[
+              styles.saveCapturedBtn,
+              !capturedImages.some((image) => image.selected) && styles.btnDisabled,
+            ]}
+          >
+            <MaterialCommunityIcons name="content-save" size={18} color="#030712" />
+            <Text style={styles.captureBtnText}>Save Selected Images</Text>
+          </TouchableOpacity>
         </View>
       </Modal>
 
@@ -740,12 +1172,49 @@ export default function Downloader() {
         }}
       />
     </KeyboardAvoidingView>
+    </Animated.View>
   );
 }
 
 const styles = StyleSheet.create({
   scroll: { flex: 1, backgroundColor: "#030712" },
-  scrollContent: { padding: 20, paddingTop: 50, paddingBottom: 40 },
+  scrollContent: { padding: 18, paddingTop: 48, paddingBottom: 40 },
+  downloadHero: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    padding: 16,
+    marginBottom: 24,
+    borderRadius: 20,
+    backgroundColor: "#0a0e17",
+    borderWidth: 1,
+    borderColor: "#1e293b",
+    borderLeftWidth: 3,
+    borderLeftColor: "#38D926",
+  },
+  heroIcon: {
+    width: 52,
+    height: 52,
+    borderRadius: 16,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#38D92615",
+    borderWidth: 1,
+    borderColor: "#38D92635",
+  },
+  heroTitle: { color: "#f8fafc", fontSize: 27, fontWeight: "900", letterSpacing: -0.5 },
+  heroBrand: { color: "#38D926", fontSize: 12, fontWeight: "700", marginTop: 2 },
+  heroCount: { alignItems: "center", minWidth: 42 },
+  heroCountValue: { color: "#38D926", fontSize: 20, fontWeight: "900" },
+  heroCountLabel: { color: "#64748b", fontSize: 8, fontWeight: "800", letterSpacing: 1 },
+  urlCard: {
+    padding: 10,
+    borderRadius: 16,
+    backgroundColor: "#0a0e17",
+    borderWidth: 1,
+    borderColor: "#141c2b",
+  },
+  urlHint: { color: "#475569", fontSize: 10, fontWeight: "600", paddingHorizontal: 6, paddingTop: 8 },
 
   // ── SECTION CONTAINERS ──
   section: { marginBottom: 32 },
@@ -784,7 +1253,7 @@ const styles = StyleSheet.create({
     borderColor: "#1e293b",
     borderTopWidth: 2,
     borderTopColor: "#38D926",
-    marginBottom: 16,
+    marginBottom: 12,
   },
   browserIconWrap: {
     width: 48,
@@ -811,13 +1280,13 @@ const styles = StyleSheet.create({
   },
 
   // Grid Below Browser
-  importGrid: { flexDirection: "row", gap: 16 },
+  importGrid: { flexDirection: "row", gap: 12 },
   importCard: {
     flex: 1,
     backgroundColor: "#0a0e17",
     borderRadius: 20,
-    paddingVertical: 20,
-    paddingHorizontal: 16,
+    paddingVertical: 16,
+    paddingHorizontal: 10,
     alignItems: "center",
     justifyContent: "center",
     borderWidth: 1,
@@ -912,6 +1381,12 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
+  adBlockerControl: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 2,
+    marginLeft: 2,
+  },
   browserUrlBox: {
     flex: 1,
     backgroundColor: "#030712",
@@ -960,4 +1435,77 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   captureBtnText: { color: "#030712", fontSize: 12, fontWeight: "900", textTransform: "uppercase" },
+  captureContainer: { flex: 1, backgroundColor: "#030712", paddingTop: Platform.OS === "ios" ? 50 : 20 },
+  captureHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 16,
+    paddingBottom: 14,
+    borderBottomWidth: 1,
+    borderColor: "#141c2b",
+  },
+  captureTitle: { color: "#f1f5f9", fontSize: 20, fontWeight: "900" },
+  captureSubtitle: { color: "#64748b", fontSize: 11, fontWeight: "600", marginTop: 3 },
+  capturedUrls: { paddingHorizontal: 12, paddingTop: 12 },
+  capturedUrlsTitle: {
+    color: "#94a3b8",
+    fontSize: 11,
+    fontWeight: "800",
+    textTransform: "uppercase",
+    letterSpacing: 1,
+    marginBottom: 6,
+  },
+  capturedUrlsList: { maxHeight: 150 },
+  capturedUrlRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    padding: 9,
+    marginBottom: 5,
+    borderRadius: 8,
+    backgroundColor: "#0a0e17",
+    borderWidth: 1,
+    borderColor: "#141c2b",
+  },
+  capturedUrlText: { flex: 1, color: "#cbd5e1", fontSize: 11 },
+  captureGrid: { flexDirection: "row", flexWrap: "wrap", gap: 8, padding: 12, paddingBottom: 90 },
+  captureImageCard: {
+    width: "31.8%",
+    aspectRatio: 0.7,
+    borderRadius: 8,
+    overflow: "hidden",
+    borderWidth: 2,
+    borderColor: "#38D926",
+    backgroundColor: "#0a0e17",
+  },
+  captureImageCardOff: { borderColor: "#334155", opacity: 0.45 },
+  captureImage: { width: "100%", height: "100%" },
+  captureCheck: {
+    position: "absolute",
+    top: 6,
+    right: 6,
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    borderWidth: 2,
+    borderColor: "#f1f5f9",
+    backgroundColor: "#030712aa",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  captureCheckSelected: { backgroundColor: "#38D926", borderColor: "#38D926" },
+  saveCapturedBtn: {
+    position: "absolute",
+    left: 16,
+    right: 16,
+    bottom: Platform.OS === "ios" ? 34 : 16,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    backgroundColor: "#38D926",
+    borderRadius: 12,
+    paddingVertical: 14,
+  },
 });

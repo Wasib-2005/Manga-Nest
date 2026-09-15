@@ -1,15 +1,15 @@
 import { Tabs } from "expo-router";
 import { CustomTabBar } from "../../components/ui/navigation/tabBar";
+import { TabTransitionProvider } from "../../components/ui/navigation/tabTransitionContext";
 
 export default function TabLayout() {
   
   return (
-    <Tabs
-      tabBar={(props) => <CustomTabBar {...props} />}
-      screenOptions={{
-        headerShown: false,
-      }}
-    >
+    <TabTransitionProvider>
+      <Tabs
+        tabBar={(props) => <CustomTabBar {...props} />}
+        screenOptions={{ headerShown: false }}
+      >
       <Tabs.Screen
         name="index"
         options={{
@@ -34,6 +34,7 @@ export default function TabLayout() {
           title: "Updates",
         }}
       />
-    </Tabs>
+      </Tabs>
+    </TabTransitionProvider>
   );
 }

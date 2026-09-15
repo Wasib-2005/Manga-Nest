@@ -38,6 +38,7 @@ interface NHGalleryData {
   title:    { pretty?: string; english?: string; japanese?: string };
   tags:     NHTag[];
   images:   { pages: NHPage[] };
+  pages?:   { path: string }[];
 }
 
 // ─── Recover tags from raw HTML when the structured parse missed them ─────────
@@ -45,15 +46,15 @@ interface NHGalleryData {
 function recoverTagsFromHtml(html: string): NHTag[] {
   const tags: NHTag[] = [];
 
-  // Strategy A: JSON-like pairs "type":"artist","name":"foo" anywhere in HTML
-  // nhentai embeds tag objects like: {"id":123,"type":"artist","name":"foo","url":"/artist/foo/","count":42}
-  const re = /\{[^{}]*?"type"\s*:\s*"([^"]+)"[^{}]*?"name"\s*:\s*"([^"]+)"[^{}]*?\}/g;
+  // Strategy A: JSON-like tag objects. Support either property order because
+  // the site's HTML and API serializers do not always emit the same order.
+  const re = /\{[^{}]*?(?:"type"\s*:\s*"([^"]+)"[^{}]*?"name"\s*:\s*"([^"]+)"|"name"\s*:\s*"([^"]+)"[^{}]*?"type"\s*:\s*"([^"]+)")[^{}]*?\}/g;
   let m: RegExpExecArray | null;
   const seen = new Set<string>();
 
   while ((m = re.exec(html)) !== null) {
-    const type = m[1];
-    const name = m[2];
+    const type = m[1] ?? m[4];
+    const name = m[2] ?? m[3];
     const key  = `${type}::${name}`;
     if (!seen.has(key)) {
       seen.add(key);
@@ -234,7 +235,7 @@ export const scrapeNhentai = async (url: string): Promise<MangaMeta> => {
   // ── Attempt 1: JSON API (fast, may still work) ────────────────────────────
   try {
     const apiRes = await fetch(
-      `https://nhentai.net/api/gallery/${galleryId}`,
+      `https://nhentai.net/api/v2/galleries/${galleryId}`,
       {
         headers: {
           ...BROWSER_HEADERS,
@@ -245,8 +246,21 @@ export const scrapeNhentai = async (url: string): Promise<MangaMeta> => {
     );
     if (apiRes.ok) {
       const json = await apiRes.json();
-      if (json?.media_id && json?.images?.pages) {
-        data = json as NHGalleryData;
+      if (json?.media_id && Array.isArray(json?.pages)) {
+        data = {
+          ...json,
+          images: {
+            pages: json.pages.map((page: { path: string }) => ({
+              t: page.path.endsWith(".png")
+                ? "p"
+                : page.path.endsWith(".gif")
+                  ? "g"
+                  : page.path.endsWith(".webp")
+                    ? "w"
+                    : "j",
+            })),
+          },
+        } as NHGalleryData;
         console.log(`[nhentai] API OK — media_id=${data.media_id} pages=${data.images.pages.length} tags=${data.tags?.length ?? 0}`);
         console.log(`[nhentai] tag sample:`, JSON.stringify(data.tags?.slice(0, 3)));
       } else {
@@ -348,4 +362,3 @@ export const scrapeNhentai = async (url: string): Promise<MangaMeta> => {
 
   return { name, author, tags, genres, ep: galleryId, source: "nhentai", imageUrls };
 };
-
