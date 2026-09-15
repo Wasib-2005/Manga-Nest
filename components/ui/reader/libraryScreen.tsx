@@ -14,6 +14,7 @@ import {
   Modal,
   StyleSheet,
 } from "react-native";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import {
   readMangaLibrary,
@@ -30,6 +31,13 @@ import {
 } from "../../../services/reader/readingProgressService";
 import { ChapterPickerModal } from "./chapterPickerModal";
 import { EditMangaModal } from "./editMangaModal";
+import Animated, {
+  FadeIn,
+  FadeInDown,
+  useAnimatedStyle,
+  withTiming,
+} from "react-native-reanimated";
+import { useTabScreenAnimation, useTabTransition } from "../navigation/tabTransitionContext";
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get("window");
 
@@ -61,7 +69,8 @@ interface FlatItem {
 
 // ─── Pagination ───────────────────────────────────────────────────────────────
 
-const PAGE_SIZE = 24; // items per page
+const PAGE_SIZE = 24; // items appended per scroll batch
+const LAYOUT_STORAGE_KEY = "library_layout_mode";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -156,12 +165,6 @@ function applyFilters(list: MangaEntry[], filters: ActiveFilters): MangaEntry[] 
   });
 }
 
-/** Format read progress like "3/12" */
-function fmtProgress(entry: RecentEntry | undefined): string | null {
-  if (!entry || !entry.totalPages) return null;
-  return `${entry.page + 1}/${entry.totalPages}`;
-}
-
 // ─── Image Sub-Components ─────────────────────────────────────────────────────
 
 const AutoHeightImage = React.memo(({ uri }: { uri: string }) => {
@@ -205,26 +208,28 @@ const CoverImage = React.memo(({
 });
 CoverImage.displayName = "CoverImage";
 
-// ─── Progress Badge ───────────────────────────────────────────────────────────
-
-const ProgressBadge = ({ entry, compact = false }: { entry?: RecentEntry; compact?: boolean }) => {
-  const label = fmtProgress(entry);
-  if (!label) return null;
-
-  const isComplete = entry && entry.totalPages > 0 && entry.page >= entry.totalPages - 1;
-
-  return (
-    <View style={[
-      styles.progressBadge,
-      isComplete && styles.progressBadgeComplete,
-      compact && { paddingHorizontal: 4, paddingVertical: 2 },
-    ]}>
-      <Text style={[styles.progressBadgeText, compact && { fontSize: 8 }]}>
-        {isComplete ? "✓" : label}
-      </Text>
-    </View>
-  );
-};
+const CardMeta = ({
+  ep,
+  currentPage,
+  totalPages,
+  compact = false,
+}: {
+  ep: string;
+  currentPage?: number;
+  totalPages?: number;
+  compact?: boolean;
+}) => (
+  <View style={[styles.cardMetaRow, compact && styles.cardMetaRowCompact]}>
+    <Text style={[styles.cardMetaText, compact && styles.cardMetaTextCompact]} numberOfLines={1}>
+      EP {ep}
+    </Text>
+    <Text style={[styles.cardMetaText, compact && styles.cardMetaTextCompact]}>
+      {currentPage !== undefined && totalPages
+        ? `${Math.min(currentPage + 1, totalPages)}/${totalPages}`
+        : `—/${totalPages || "—"}`}
+    </Text>
+  </View>
+);
 
 // ─── AdaptiveCard ─────────────────────────────────────────────────────────────
 
@@ -239,6 +244,9 @@ const AdaptiveCard = React.memo(({
   const srcColor = SRC_COLOR[item.source] ?? "#64748b";
   const isCompact = mode === "compact";
   const wasRead = !!recentEntry;
+  const currentEp = recentEntry?.ep ?? item.chapters[0]?.ep ?? "—";
+  const activeChapter = item.chapters.find((chapter) => chapter.ep === currentEp) ?? item.chapters[0];
+  const totalPages = recentEntry?.totalPages || activeChapter?.pages || 0;
 
   if (mode === "hero") {
     return (
@@ -247,9 +255,9 @@ const AdaptiveCard = React.memo(({
         <View style={{ marginTop: 14 }}>
           <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
             <Text style={{ color: srcColor, fontWeight: "900", fontSize: 12 }}>{item.source.toUpperCase()}</Text>
-            <ProgressBadge entry={recentEntry} />
           </View>
           <Text style={{ color: "#f1f5f9", fontWeight: "900", fontSize: 22, marginTop: 4 }}>{item.name}</Text>
+          <CardMeta ep={currentEp} currentPage={recentEntry?.page} totalPages={totalPages} />
           {item.tags.length > 0 && (
             <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: 8 }}>
               {item.tags.slice(0, 5).map((t) => (
@@ -257,10 +265,6 @@ const AdaptiveCard = React.memo(({
               ))}
             </ScrollView>
           )}
-          <View style={{ flexDirection: "row", alignItems: "center", marginTop: 10, backgroundColor: "#0a0e17", padding: 10, borderRadius: 8 }}>
-            <MaterialCommunityIcons name="library-shelves" size={18} color="#38D926" />
-            <Text style={{ color: "#f1f5f9", marginLeft: 8, fontWeight: "600" }}>{item.chapters.length} Chapters stored</Text>
-          </View>
         </View>
       </View>
     );
@@ -268,22 +272,16 @@ const AdaptiveCard = React.memo(({
 
   if (mode === "list") {
     return (
-      <View style={{ flexDirection: "row", gap: 14, backgroundColor: "#0a0e17", borderRadius: 16, padding: 12, marginBottom: 12, marginHorizontal: 16, borderWidth: 1, borderColor: wasRead ? "#38D92630" : "#141c2b" }}>
-        <View style={{ width: 80, height: 110 }}><CoverImage uid={item.uid} firstEp={firstEp} height={110} /></View>
-        <View style={{ flex: 1, justifyContent: "space-between" }}>
-          <View>
-            <Text style={{ color: srcColor, fontSize: 10, fontWeight: "900" }}>{SRC_LABEL[item.source]}</Text>
-            <Text style={{ color: "#f1f5f9", fontWeight: "700", fontSize: 15 }} numberOfLines={2}>{item.name}</Text>
-            {item.genres.length > 0 && (
-              <Text style={{ color: "#475569", fontSize: 10, marginTop: 3 }} numberOfLines={1}>
-                {item.genres.slice(0, 3).join(" · ")}
-              </Text>
-            )}
+      <View style={[styles.libraryCard, wasRead && styles.libraryCardRead]}>
+        <View style={styles.libraryCover}>
+          <CoverImage uid={item.uid} firstEp={firstEp} height={112} />
+        </View>
+        <View style={styles.libraryCardBody}>
+          <View style={styles.libraryCardHeader}>
+            <Text style={[styles.sourceLabel, { color: srcColor }]}>{SRC_LABEL[item.source]}</Text>
           </View>
-          <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-            <Text style={{ color: "#38D926", fontSize: 12, fontWeight: "800" }}>{item.chapters.length} Eps</Text>
-            <ProgressBadge entry={recentEntry} />
-          </View>
+          <Text style={styles.libraryCardTitle} numberOfLines={2}>{item.name}</Text>
+          <CardMeta ep={currentEp} currentPage={recentEntry?.page} totalPages={totalPages} />
         </View>
       </View>
     );
@@ -291,21 +289,24 @@ const AdaptiveCard = React.memo(({
 
   // grid / compact
   return (
-    <View style={{ marginBottom: 16, position: "relative" }}>
+    <View style={[
+      styles.gridCard,
+      isCompact ? styles.compactCard : styles.gridCardLarge,
+      wasRead && styles.libraryCardRead,
+    ]}>
       <CoverImage uid={item.uid} firstEp={firstEp} height={isCompact ? 130 : 180} />
-      {/* Progress badge overlay */}
-      {recentEntry && (
-        <View style={styles.badgeOverlay}>
-          <ProgressBadge entry={recentEntry} compact={isCompact} />
-        </View>
-      )}
       {/* Unread dot */}
       {!wasRead && (
         <View style={styles.unreadDot} />
       )}
-      <View style={{ marginTop: 6, paddingHorizontal: 2 }}>
+      <View style={styles.gridCardInfo}>
         <Text style={{ color: "#f1f5f9", fontWeight: "600", fontSize: isCompact ? 10 : 12 }} numberOfLines={1}>{item.name}</Text>
-        <Text style={{ color: "#38D926", fontSize: 9, fontWeight: "700" }}>{item.chapters.length} Eps</Text>
+        <CardMeta
+          ep={currentEp}
+          currentPage={recentEntry?.page}
+          totalPages={totalPages}
+          compact={isCompact}
+        />
       </View>
     </View>
   );
@@ -335,12 +336,8 @@ const FlatCard = React.memo(({
           <View>
             <Text style={{ color: srcColor, fontSize: 10, fontWeight: "900" }}>{SRC_LABEL[manga.source]}</Text>
             <Text style={{ color: "#f1f5f9", fontWeight: "700", fontSize: 14 }} numberOfLines={2}>{manga.name}</Text>
-            <Text style={{ color: "#38D926", fontSize: 12, marginTop: 4, fontWeight: "800" }}>EP {chapter.ep}</Text>
           </View>
-          <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-            <Text style={{ color: "#475569", fontSize: 10 }}>{chapter.pages} pages</Text>
-            <ProgressBadge entry={chapterEntry} />
-          </View>
+          <CardMeta ep={chapter.ep} currentPage={chapterEntry?.page} totalPages={chapter.pages} />
         </View>
       </View>
     );
@@ -349,101 +346,53 @@ const FlatCard = React.memo(({
   return (
     <View style={{ marginBottom: 16, position: "relative" }}>
       <CoverImage uid={manga.uid} firstEp={chapter.ep} height={isCompact ? 130 : 180} />
-      {chapterEntry && (
-        <View style={styles.badgeOverlay}>
-          <ProgressBadge entry={chapterEntry} compact={isCompact} />
-        </View>
-      )}
       <View style={{ marginTop: 6, paddingHorizontal: 2 }}>
         <Text style={{ color: "#f1f5f9", fontWeight: "600", fontSize: isCompact ? 10 : 12 }} numberOfLines={1}>{manga.name}</Text>
-        <Text style={{ color: "#38D926", fontSize: 9, fontWeight: "700" }}>EP {chapter.ep}</Text>
+        <CardMeta
+          ep={chapter.ep}
+          currentPage={chapterEntry?.page}
+          totalPages={chapter.pages}
+          compact={isCompact}
+        />
       </View>
     </View>
   );
 });
 FlatCard.displayName = "FlatCard";
 
-// ─── Pagination Controls ──────────────────────────────────────────────────────
-
-const PaginationBar = ({
-  currentPage,
-  totalPages,
-  onPrev,
-  onNext,
-  onGoTo,
-  totalItems,
-  pageSize,
+const LoadMoreFooter = ({
+  loaded,
+  total,
+  onLoadMore,
+  onTop,
 }: {
-  currentPage: number;
-  totalPages: number;
-  onPrev: () => void;
-  onNext: () => void;
-  onGoTo: (page: number) => void;
-  totalItems: number;
-  pageSize: number;
+  loaded: number;
+  total: number;
+  onLoadMore: () => void;
+  onTop: () => void;
 }) => {
-  if (totalPages <= 1) return null;
-
-  const start = currentPage * pageSize + 1;
-  const end   = Math.min((currentPage + 1) * pageSize, totalItems);
-
-  // Show at most 5 page numbers around current
-  const pageNumbers: (number | "...")[] = [];
-  if (totalPages <= 7) {
-    for (let i = 0; i < totalPages; i++) pageNumbers.push(i);
-  } else {
-    pageNumbers.push(0);
-    if (currentPage > 2) pageNumbers.push("...");
-    for (let i = Math.max(1, currentPage - 1); i <= Math.min(totalPages - 2, currentPage + 1); i++) {
-      pageNumbers.push(i);
-    }
-    if (currentPage < totalPages - 3) pageNumbers.push("...");
-    pageNumbers.push(totalPages - 1);
-  }
-
+  if (total === 0) return null;
+  const complete = loaded >= total;
   return (
-    <View style={styles.paginationBar}>
-      {/* Count label */}
+    <View style={styles.loadMoreFooter}>
       <Text style={styles.paginationLabel}>
-        {start}–{end} of {totalItems}
+        Showing {Math.min(loaded, total)} of {total}
       </Text>
-
-      <View style={styles.paginationControls}>
-        {/* Prev */}
-        <TouchableOpacity
-          onPress={onPrev}
-          disabled={currentPage === 0}
-          style={[styles.pageBtn, currentPage === 0 && styles.pageBtnDisabled]}
-        >
-          <MaterialCommunityIcons name="chevron-left" size={16} color={currentPage === 0 ? "#1e293b" : "#38D926"} />
+      {!complete && (
+        <TouchableOpacity onPress={onLoadMore} style={styles.loadMoreBtn}>
+          <Text style={styles.loadMoreText}>LOAD MORE</Text>
+          <MaterialCommunityIcons name="chevron-down" size={16} color="#030712" />
         </TouchableOpacity>
-
-        {/* Page numbers */}
-        {pageNumbers.map((pn, idx) =>
-          pn === "..." ? (
-            <Text key={`ellipsis-${idx}`} style={styles.pageBtnEllipsis}>…</Text>
-          ) : (
-            <TouchableOpacity
-              key={pn}
-              onPress={() => onGoTo(pn as number)}
-              style={[styles.pageBtn, pn === currentPage && styles.pageBtnActive]}
-            >
-              <Text style={[styles.pageBtnText, pn === currentPage && styles.pageBtnTextActive]}>
-                {(pn as number) + 1}
-              </Text>
-            </TouchableOpacity>
-          )
-        )}
-
-        {/* Next */}
-        <TouchableOpacity
-          onPress={onNext}
-          disabled={currentPage === totalPages - 1}
-          style={[styles.pageBtn, currentPage === totalPages - 1 && styles.pageBtnDisabled]}
-        >
-          <MaterialCommunityIcons name="chevron-right" size={16} color={currentPage === totalPages - 1 ? "#1e293b" : "#38D926"} />
-        </TouchableOpacity>
-      </View>
+      )}
+      {complete && total > PAGE_SIZE && (
+        <>
+          <Text style={styles.paginationLabel}>All items loaded</Text>
+          <TouchableOpacity onPress={onTop} style={styles.topBtn}>
+            <MaterialCommunityIcons name="arrow-up" size={15} color="#38D926" />
+            <Text style={styles.topBtnText}>BACK TO TOP</Text>
+          </TouchableOpacity>
+        </>
+      )}
     </View>
   );
 };
@@ -467,6 +416,7 @@ const FilterModal = ({
   filters, onChange, flatMode, onToggleFlatMode,
 }: FilterModalProps) => {
   const [local, setLocal] = useState<ActiveFilters>(filters);
+  const [filterSearch, setFilterSearch] = useState("");
   useEffect(() => { if (visible) setLocal(filters); }, [visible]);
 
   const toggle = (key: keyof ActiveFilters, value: string) =>
@@ -478,6 +428,9 @@ const FilterModal = ({
     }));
 
   const activeCount = local.tags.length + local.genres.length + local.sources.length;
+  const filterTerm = filterSearch.trim().toLowerCase();
+  const visibleItems = (items: string[]) =>
+    filterTerm ? items.filter((item) => item.toLowerCase().includes(filterTerm)) : items;
 
   const Section = ({ title, items, filterKey }: {
     title: string; items: string[]; filterKey: keyof ActiveFilters;
@@ -521,6 +474,21 @@ const FilterModal = ({
         </View>
 
         <ScrollView contentContainerStyle={{ paddingHorizontal: 20, paddingTop: 20, paddingBottom: 44 }}>
+          <View style={styles.filterSearch}>
+            <MaterialCommunityIcons name="magnify" size={17} color="#64748b" />
+            <TextInput
+              value={filterSearch}
+              onChangeText={setFilterSearch}
+              placeholder="Search tags, genres, or source"
+              placeholderTextColor="#475569"
+              style={styles.filterSearchInput}
+            />
+            {filterSearch.length > 0 && (
+              <TouchableOpacity onPress={() => setFilterSearch("")}>
+                <MaterialCommunityIcons name="close-circle" size={16} color="#64748b" />
+              </TouchableOpacity>
+            )}
+          </View>
           <View style={{ marginBottom: 24 }}>
             <Text style={styles.filterSectionLabel}>View Mode</Text>
             <TouchableOpacity onPress={onToggleFlatMode} style={[styles.flatToggle, flatMode && styles.flatToggleActive]}>
@@ -533,9 +501,9 @@ const FilterModal = ({
             </TouchableOpacity>
           </View>
 
-          <Section title="Source" items={allSources} filterKey="sources" />
-          <Section title="Genres" items={allGenres} filterKey="genres" />
-          <Section title="Tags"   items={allTags}   filterKey="tags" />
+          <Section title="Source" items={visibleItems(allSources)} filterKey="sources" />
+          <Section title="Genres" items={visibleItems(allGenres)} filterKey="genres" />
+          <Section title="Tags"   items={visibleItems(allTags)}   filterKey="tags" />
         </ScrollView>
 
         <View style={{ flexDirection: "row", gap: 10, paddingHorizontal: 20, paddingBottom: 32, paddingTop: 12, borderTopWidth: 1, borderTopColor: "#0f172a" }}>
@@ -583,12 +551,14 @@ export const LibraryScreen = ({
   onRenameChapter,
   hideMode,
 }: any) => {
+  const tabAnimation = useTabScreenAnimation("index");
+  const { setTabBarHidden } = useTabTransition();
   const [manga, setManga] = useState<MangaEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [search, setSearch] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>("recent");
-  const [layout, setLayout] = useState<LayoutMode>("grid");
+  const [layout, setLayout] = useState<LayoutMode>("list");
   const [hiddenList, setHiddenList] = useState<string[]>([]);
   const [recentMap, setRecentMap] = useState<Map<string, RecentEntry>>(new Map());
   const [pickerManga, setPickerManga] = useState<MangaEntry | null>(null);
@@ -598,8 +568,43 @@ export const LibraryScreen = ({
   const [flatMode, setFlatMode] = useState(false);
 
   // Pagination
-  const [currentPage, setCurrentPage] = useState(0);
+  const [visibleState, setVisibleState] = useState({
+    key: "",
+    count: PAGE_SIZE,
+  });
   const listRef = useRef<FlatList<any>>(null);
+  const lastScrollOffset = useRef(0);
+  const [chromeVisible, setChromeVisible] = useState(true);
+  const [chromeHeight, setChromeHeight] = useState(0);
+
+  const handleLibraryScroll = useCallback((event: {
+    nativeEvent: { contentOffset: { y: number } };
+  }) => {
+    const offset = Math.max(0, event.nativeEvent.contentOffset.y);
+    if (offset > lastScrollOffset.current + 12 && offset > 24) {
+      setChromeVisible(false);
+      setTabBarHidden(true);
+    } else if (offset < lastScrollOffset.current - 12 || offset <= 8) {
+      setChromeVisible(true);
+      setTabBarHidden(false);
+    }
+    lastScrollOffset.current = offset;
+  }, [setTabBarHidden]);
+
+  useEffect(() => () => setTabBarHidden(false), [setTabBarHidden]);
+
+  useEffect(() => {
+    AsyncStorage.getItem(LAYOUT_STORAGE_KEY).then((saved) => {
+      if (saved === "hero" || saved === "list" || saved === "grid" || saved === "compact") {
+        setLayout(saved);
+      }
+    });
+  }, []);
+
+  const changeLayout = useCallback((next: LayoutMode) => {
+    setLayout(next);
+    void AsyncStorage.setItem(LAYOUT_STORAGE_KEY, next);
+  }, []);
 
   const loadData = useCallback(async () => {
     const [library, hidden, recent] = await Promise.all([
@@ -654,31 +659,34 @@ export const LibraryScreen = ({
     return filtered.flatMap((m) => m.chapters.map((ch) => ({ manga: m, chapter: ch })));
   }, [flatMode, filtered]);
 
-  // Pagination derived state
-  const totalItems  = flatMode ? flatItems.length : filtered.length;
-  const totalPages  = Math.max(1, Math.ceil(totalItems / PAGE_SIZE));
-  const safePage    = Math.min(currentPage, totalPages - 1);
+  const totalItems = flatMode ? flatItems.length : filtered.length;
+  const listKey = `${search}|${sortKey}|${flatMode}|${filters.sources.join(",")}|${filters.genres.join(",")}|${filters.tags.join(",")}`;
+  const visibleCount = visibleState.key === listKey ? visibleState.count : PAGE_SIZE;
+  const pagedData = useMemo(
+    () => (flatMode ? flatItems.slice(0, visibleCount) : filtered.slice(0, visibleCount)),
+    [flatMode, flatItems, filtered, visibleCount],
+  );
 
-  const pagedData = useMemo(() => {
-    const start = safePage * PAGE_SIZE;
-    const end   = start + PAGE_SIZE;
-    return flatMode
-      ? flatItems.slice(start, end)
-      : filtered.slice(start, end);
-  }, [flatMode, flatItems, filtered, safePage]);
+  const loadMore = useCallback(() => {
+    setVisibleState((previous) => ({
+      key: listKey,
+      count: Math.min(
+        (previous.key === listKey ? previous.count : PAGE_SIZE) + PAGE_SIZE,
+        totalItems,
+      ),
+    }));
+  }, [listKey, totalItems]);
 
-  // Reset to page 0 whenever the filtered set changes
-  useEffect(() => {
-    setCurrentPage(0);
-  }, [search, sortKey, filters, flatMode]);
-
-  const goToPage = (p: number) => {
-    setCurrentPage(p);
-    listRef.current?.scrollToOffset({ offset: 0, animated: true });
-  };
+  const handleEndReached = useCallback(() => {
+    if (visibleCount < totalItems) loadMore();
+  }, [loadMore, totalItems, visibleCount]);
 
   const numColumns = layout === "grid" ? 2 : layout === "compact" ? 4 : 1;
-
+  const layoutLabel = layout === "hero" ? "Big cards" : layout === "list" ? "List" : layout === "grid" ? "2 columns" : "4 columns";
+  const chromeStyle = useAnimatedStyle(() => ({
+    opacity: withTiming(chromeVisible ? 1 : 0, { duration: 180 }),
+    transform: [{ translateY: withTiming(chromeVisible ? 0 : -chromeHeight, { duration: 180 }) }],
+  }), [chromeVisible]);
   const removeFilter = useCallback((key: keyof ActiveFilters, value: string) => {
     setFilters((prev) => ({ ...prev, [key]: prev[key].filter((v) => v !== value) }));
   }, []);
@@ -691,18 +699,31 @@ export const LibraryScreen = ({
     );
 
   return (
-    <View style={{ flex: 1, backgroundColor: "#030712" }}>
+    <Animated.View entering={FadeIn.duration(280)} style={[{ flex: 1, backgroundColor: "#030712" }, tabAnimation]}>
 
-      {/* ══ ROW 1 — Title + Layout switcher ══ */}
-      <View style={styles.row1}>
-        <Text style={styles.title}>
-          Manga <Text style={{ color: "#38D926" }}>Nest</Text>
-        </Text>
+      <Animated.View
+        style={[styles.libraryChrome, chromeStyle]}
+        pointerEvents={chromeVisible ? "auto" : "none"}
+        onLayout={(event) => {
+          const nextHeight = event.nativeEvent.layout.height;
+          if (nextHeight !== chromeHeight) setChromeHeight(nextHeight);
+        }}
+      >
+        {/* ══ ROW 1 — Title + Layout switcher ══ */}
+        <Animated.View entering={FadeInDown.delay(80).duration(360)} style={styles.row1}>
+        <View>
+          <Text style={styles.title}>
+            <Text style={{ color: "#f1f5f9" }}>Manga</Text>
+            <Text style={{ color: "#38D926" }}>Nest</Text>
+          </Text>
+          <Text style={styles.pageSubtitle}>Library</Text>
+        </View>
         <View style={styles.layoutSwitcher}>
           {(["hero", "list", "grid", "compact"] as LayoutMode[]).map((m) => (
             <TouchableOpacity
               key={m}
-              onPress={() => setLayout(m)}
+              onPress={() => changeLayout(m)}
+              accessibilityLabel={`Use ${m === "hero" ? "big cards" : m === "list" ? "list" : m === "grid" ? "two column grid" : "four column grid"} layout`}
               style={[styles.layoutBtn, layout === m && styles.layoutBtnActive]}
             >
               <MaterialCommunityIcons
@@ -713,10 +734,10 @@ export const LibraryScreen = ({
             </TouchableOpacity>
           ))}
         </View>
-      </View>
+        </Animated.View>
 
       {/* ══ ROW 2 — Search bar ══ */}
-      <View style={styles.row2}>
+        <Animated.View entering={FadeInDown.delay(140).duration(420)} style={styles.row2}>
         <View style={styles.searchWrapper}>
           <MaterialCommunityIcons name="magnify" size={16} color="#334155" style={{ marginRight: 8 }} />
           <TextInput
@@ -732,10 +753,10 @@ export const LibraryScreen = ({
             </TouchableOpacity>
           )}
         </View>
-      </View>
+        </Animated.View>
 
       {/* ══ ROW 3 — Sort pills + Refresh + Filter ══ */}
-      <View style={styles.row3}>
+        <View style={styles.row3}>
         <ScrollView
           horizontal
           showsHorizontalScrollIndicator={false}
@@ -804,25 +825,25 @@ export const LibraryScreen = ({
         </TouchableOpacity>
       </View>
 
-      {/* ══ ROW 4 — Active filter chips ══ */}
-      {activeFilterCount > 0 && (
-        <View style={{ paddingHorizontal: 16, paddingBottom: 8 }}>
-          <ActiveFilterChips filters={filters} onRemove={removeFilter} />
-        </View>
-      )}
+        {/* ══ ROW 4 — Active filter chips ══ */}
+        {activeFilterCount > 0 && (
+          <View style={{ paddingHorizontal: 16, paddingBottom: 8 }}>
+            <ActiveFilterChips filters={filters} onRemove={removeFilter} />
+          </View>
+        )}
 
-      {/* Flat mode banner */}
-      {flatMode && (
-        <View style={styles.flatBanner}>
-          <MaterialCommunityIcons name="format-list-bulleted-square" size={13} color="#38D926" />
-          <Text style={styles.flatBannerText}>
-            Single Episode View — {flatItems.length} episodes
-          </Text>
-          <TouchableOpacity onPress={() => setFlatMode(false)} style={{ marginLeft: "auto" }}>
-            <MaterialCommunityIcons name="close" size={14} color="#38D926" />
-          </TouchableOpacity>
-        </View>
-      )}
+        {flatMode && (
+          <View style={styles.flatBanner}>
+            <MaterialCommunityIcons name="format-list-bulleted-square" size={13} color="#38D926" />
+            <Text style={styles.flatBannerText}>
+              Single Episode View — {flatItems.length} episodes
+            </Text>
+            <TouchableOpacity onPress={() => setFlatMode(false)} style={{ marginLeft: "auto" }}>
+              <MaterialCommunityIcons name="close" size={14} color="#38D926" />
+            </TouchableOpacity>
+          </View>
+        )}
+      </Animated.View>
 
       {/* ══ Data ══ */}
       {flatMode ? (
@@ -833,19 +854,20 @@ export const LibraryScreen = ({
           numColumns={numColumns}
           keyExtractor={(item: FlatItem) => `${item.manga.uid}-${item.chapter.ep}`}
           columnWrapperStyle={numColumns > 1 ? { justifyContent: "flex-start", gap: 8, paddingHorizontal: 12 } : null}
-          contentContainerStyle={{ paddingTop: 8, paddingBottom: 20 }}
+          contentContainerStyle={{ paddingTop: chromeVisible ? chromeHeight + 8 : 8, paddingBottom: 100 }}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#38D926" />}
-          ListFooterComponent={
-            <PaginationBar
-              currentPage={safePage}
-              totalPages={totalPages}
-              onPrev={() => goToPage(safePage - 1)}
-              onNext={() => goToPage(safePage + 1)}
-              onGoTo={goToPage}
-              totalItems={totalItems}
-              pageSize={PAGE_SIZE}
-            />
-          }
+          // Keep variable-height chapter cards mounted so row measurements do not
+          // change underneath the native scroll view while it is moving.
+          removeClippedSubviews={false}
+          initialNumToRender={12}
+          maxToRenderPerBatch={8}
+          updateCellsBatchingPeriod={50}
+          windowSize={7}
+          onScroll={handleLibraryScroll}
+          scrollEventThrottle={32}
+          onEndReached={handleEndReached}
+          onEndReachedThreshold={0.5}
+          ListFooterComponent={<LoadMoreFooter loaded={pagedData.length} total={totalItems} onLoadMore={loadMore} onTop={() => listRef.current?.scrollToOffset({ offset: 0, animated: true })} />}
           renderItem={({ item }: { item: FlatItem }) => (
             <TouchableOpacity
               style={{ width: numColumns === 1 ? "100%" : (SCREEN_WIDTH - (numColumns + 1) * 12) / numColumns }}
@@ -871,19 +893,20 @@ export const LibraryScreen = ({
           numColumns={numColumns}
           keyExtractor={(item: MangaEntry) => item.uid}
           columnWrapperStyle={numColumns > 1 ? { justifyContent: "flex-start", gap: 8, paddingHorizontal: 12 } : null}
-          contentContainerStyle={{ paddingTop: 8, paddingBottom: 20 }}
+          contentContainerStyle={{ paddingTop: chromeVisible ? chromeHeight + 8 : 8, paddingBottom: 100 }}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#38D926" />}
-          ListFooterComponent={
-            <PaginationBar
-              currentPage={safePage}
-              totalPages={totalPages}
-              onPrev={() => goToPage(safePage - 1)}
-              onNext={() => goToPage(safePage + 1)}
-              onGoTo={goToPage}
-              totalItems={totalItems}
-              pageSize={PAGE_SIZE}
-            />
-          }
+          // Keep variable-height cards mounted so row measurements remain stable
+          // while cover images finish loading.
+          removeClippedSubviews={false}
+          initialNumToRender={12}
+          maxToRenderPerBatch={8}
+          updateCellsBatchingPeriod={50}
+          windowSize={7}
+          onScroll={handleLibraryScroll}
+          scrollEventThrottle={32}
+          onEndReached={handleEndReached}
+          onEndReachedThreshold={0.5}
+          ListFooterComponent={<LoadMoreFooter loaded={pagedData.length} total={totalItems} onLoadMore={loadMore} onTop={() => listRef.current?.scrollToOffset({ offset: 0, animated: true })} />}
           renderItem={({ item }: { item: MangaEntry }) => (
             <TouchableOpacity
               style={{ width: numColumns === 1 ? "100%" : (SCREEN_WIDTH - (numColumns + 1) * 12) / numColumns }}
@@ -956,13 +979,21 @@ export const LibraryScreen = ({
           }}
         />
       )}
-    </View>
+    </Animated.View>
   );
 };
 
 // ─── Styles ───────────────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
+  libraryChrome: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    zIndex: 10,
+    backgroundColor: "#030712",
+  },
   row1: {
     flexDirection: "row",
     alignItems: "center",
@@ -990,6 +1021,72 @@ const styles = StyleSheet.create({
   },
   layoutBtnActive: {
     backgroundColor: "#1e293b",
+  },
+  libraryCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#0a0e17",
+    borderRadius: 16,
+    padding: 10,
+    marginBottom: 12,
+    marginHorizontal: 16,
+    borderWidth: 1,
+    borderColor: "#141c2b",
+  },
+  libraryCardRead: {
+    borderColor: "#38D92645",
+  },
+  libraryCover: {
+    width: 76,
+    height: 112,
+    borderRadius: 10,
+    overflow: "hidden",
+    backgroundColor: "#0f172a",
+  },
+  libraryCardBody: {
+    flex: 1,
+    minHeight: 112,
+    justifyContent: "space-between",
+    paddingLeft: 12,
+    paddingVertical: 2,
+  },
+  libraryCardHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    minHeight: 20,
+  },
+  sourceLabel: {
+    fontSize: 10,
+    fontWeight: "900",
+    letterSpacing: 0.8,
+  },
+  libraryCardTitle: {
+    color: "#f1f5f9",
+    fontSize: 16,
+    lineHeight: 21,
+    fontWeight: "800",
+    marginTop: 4,
+  },
+  cardMetaRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginTop: 12,
+    maxWidth: 190,
+  },
+  cardMetaRowCompact: {
+    marginTop: 4,
+    maxWidth: 150,
+  },
+  cardMetaText: {
+    color: "#38D926",
+    fontSize: 12,
+    fontWeight: "900",
+    fontVariant: ["tabular-nums"],
+  },
+  cardMetaTextCompact: {
+    fontSize: 9,
   },
   row2: {
     paddingHorizontal: 16,
@@ -1164,6 +1261,23 @@ const styles = StyleSheet.create({
     letterSpacing: 1.2,
     marginBottom: 12,
   },
+  filterSearch: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    backgroundColor: "#0a0e17",
+    borderWidth: 1,
+    borderColor: "#1e293b",
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    marginBottom: 22,
+  },
+  filterSearchInput: {
+    flex: 1,
+    color: "#f1f5f9",
+    fontSize: 13,
+    paddingVertical: 11,
+  },
   filterChip: {
     paddingHorizontal: 12,
     paddingVertical: 6,
@@ -1213,8 +1327,35 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
 
-  // ── Pagination
-  paginationBar: {
+  // ── Incremental loading
+  layoutHint: {
+    color: "#64748b",
+    fontSize: 10,
+    fontWeight: "700",
+    letterSpacing: 1,
+    marginTop: 2,
+    textTransform: "uppercase",
+  },
+  pageSubtitle: {
+    color: "#38D926",
+    fontSize: 12,
+    fontWeight: "700",
+    marginTop: 3,
+  },
+  gridCard: {
+    marginBottom: 16,
+    position: "relative",
+    overflow: "hidden",
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#141c2b",
+    backgroundColor: "#0a0e17",
+    padding: 6,
+  },
+  gridCardLarge: { minHeight: 230 },
+  compactCard: { minHeight: 165, padding: 4, borderRadius: 9 },
+  gridCardInfo: { marginTop: 6, paddingHorizontal: 2, paddingBottom: 2 },
+  loadMoreFooter: {
     paddingHorizontal: 16,
     paddingVertical: 18,
     paddingBottom: 90,
@@ -1226,43 +1367,35 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: "600",
   },
-  paginationControls: {
+  loadMoreBtn: {
     flexDirection: "row",
     alignItems: "center",
     gap: 6,
-    flexWrap: "wrap",
-    justifyContent: "center",
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 10,
+    backgroundColor: "#38D926",
   },
-  pageBtn: {
-    minWidth: 34,
-    height: 34,
-    borderRadius: 8,
-    backgroundColor: "#0a0e17",
-    borderWidth: 1,
-    borderColor: "#1e293b",
-    justifyContent: "center",
+  loadMoreText: {
+    color: "#030712",
+    fontSize: 11,
+    fontWeight: "900",
+    letterSpacing: 1.2,
+  },
+  topBtn: {
+    flexDirection: "row",
     alignItems: "center",
-    paddingHorizontal: 6,
+    gap: 6,
+    borderWidth: 1,
+    borderColor: "#285b28",
+    borderRadius: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 9,
   },
-  pageBtnActive: {
-    backgroundColor: "#38D92618",
-    borderColor: "#38D926",
-  },
-  pageBtnDisabled: {
-    opacity: 0.3,
-  },
-  pageBtnText: {
-    color: "#475569",
-    fontSize: 12,
-    fontWeight: "700",
-  },
-  pageBtnTextActive: {
+  topBtnText: {
     color: "#38D926",
-  },
-  pageBtnEllipsis: {
-    color: "#334155",
-    fontSize: 14,
-    paddingHorizontal: 4,
-    lineHeight: 34,
+    fontSize: 10,
+    fontWeight: "900",
+    letterSpacing: 1,
   },
 });

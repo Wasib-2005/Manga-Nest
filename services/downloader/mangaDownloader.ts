@@ -2,6 +2,13 @@ import { Platform, PermissionsAndroid } from "react-native";
 import { Directory, File, Paths } from "expo-file-system";
 import type { MangaMeta, EditedMeta, DownloadProgress } from "./types/manga";
 import { runSequentialScan } from "./scrape/sequential";
+import {
+  createManga,
+  deleteManga,
+  findMangaByName,
+  initializeDatabase,
+  upsertChapter,
+} from "../reader/database";
 
 const MAX_RETRY = 3;
 
@@ -14,16 +21,19 @@ const HEADERS: Record<MangaMeta["source"], Record<string, string>> = {
     Referer: "https://www.hentaicity.com/",
   },
   hentaiera: { "User-Agent": "Mozilla/5.0", Referer: "https://hentaiera.com/" },
+  local: { "User-Agent": "Mozilla/5.0" },
 };
 
-// ─── Types ────────────────────────────────────────────────────────────────────
-
-interface IndexEntry {
-  uid: string;
-  name: string;
-  source: MangaMeta["source"];
-  addedAt: string;
+function decodeDataUrl(url: string): Uint8Array | null {
+  const match = url.match(/^data:image\/[^;]+;base64,(.+)$/);
+  if (!match) return null;
+  const binary = atob(match[1]);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index++) bytes[index] = binary.charCodeAt(index);
+  return bytes;
 }
+
+// ─── Types ────────────────────────────────────────────────────────────────────
 
 // ─── Lock ─────────────────────────────────────────────────────────────────────
 
@@ -49,65 +59,8 @@ function generateUid(): string {
   ).join("");
 }
 
-function uniqueUid(existing: IndexEntry[]): string {
-  const taken = new Set(existing.map((e) => e.uid));
-  let uid: string;
-  do {
-    uid = generateUid();
-  } while (taken.has(uid));
-  return uid;
-}
-
-// ─── Registry ─────────────────────────────────────────────────────────────────
-
-async function readIndex(root: Directory): Promise<IndexEntry[]> {
-  try {
-    const f = new File(`${root.uri}/index.json`);
-    if (!f.exists) return [];
-    const parsed = JSON.parse(await f.text());
-    if (!Array.isArray(parsed)) throw new Error("not an array");
-    return parsed.filter((e: IndexEntry) => {
-      try {
-        return new Directory(root, e.uid).exists;
-      } catch {
-        return false;
-      }
-    });
-  } catch (err) {
-    console.warn("⚠️  index.json unreadable — rebuilding:", err);
-    return rebuildIndexAsync(root);
-  }
-}
-
-async function rebuildIndexAsync(root: Directory): Promise<IndexEntry[]> {
-  const entries: IndexEntry[] = [];
-  try {
-    for (const item of root.list()) {
-      if (!(item instanceof Directory)) continue;
-      try {
-        const f = new File(`${item.uri}/title.json`);
-        if (!f.exists) continue;
-        const data: IndexEntry = JSON.parse(await f.text());
-        if (data.uid && data.name && data.source) entries.push(data);
-      } catch {
-        /* skip */
-      }
-    }
-  } catch {
-    /* root not yet created */
-  }
-  return entries;
-}
-
-async function writeIndex(
-  root: Directory,
-  entries: IndexEntry[],
-): Promise<void> {
-  const tmp = new File(`${root.uri}/index.json.tmp`);
-  const real = new File(`${root.uri}/index.json`);
-  await tmp.write(JSON.stringify(entries, null, 2));
-  if (real.exists) real.delete();
-  await tmp.move(real);
+function uniqueUid(): string {
+  return generateUid();
 }
 
 // ─── Permission ───────────────────────────────────────────────────────────────
@@ -170,27 +123,28 @@ export const downloadManga = async (
   // ── 2. Ensure manga root ───────────────────────────────────────────────────
   const root = new Directory(Paths.document, "manga");
   if (!root.exists) root.create({ intermediates: true });
+  await initializeDatabase();
 
   // ── 3. Registry lookup ────────────────────────────────────────────────────
   const { uid, isNewTitle } = await withLock(async () => {
-    const entries = await readIndex(root);
-    const normName = canonicalName.toLowerCase();
-    const existing = entries.find((e) => e.name.toLowerCase() === normName);
+    const existing = await findMangaByName(canonicalName);
 
     if (existing) {
-      const done = new File(`${root.uri}/${existing.uid}/${ep}/info.json`);
-      if (done.exists) throw new Error("ALREADY_EXISTS");
+      const chapterDir = new Directory(root, `${existing.uid}/${ep}`);
+      if (chapterDir.exists) throw new Error("ALREADY_EXISTS");
       return { uid: existing.uid, isNewTitle: false };
     }
 
-    const newUid = uniqueUid(entries);
-    entries.push({
+    const newUid = uniqueUid();
+    await createManga({
       uid: newUid,
       name: canonicalName,
+      author: edited.author.trim(),
       source: resolvedMeta.source,
+      tags: edited.tags.split(",").map((t) => t.trim()).filter(Boolean),
+      genres: edited.genres.split(",").map((t) => t.trim()).filter(Boolean),
       addedAt: new Date().toISOString(),
     });
-    await writeIndex(root, entries);
     return { uid: newUid, isNewTitle: true };
   });
 
@@ -201,31 +155,6 @@ export const downloadManga = async (
   if (!titleDir.exists) titleDir.create({ intermediates: true });
   if (!chapterDir.exists) chapterDir.create({ intermediates: true });
 
-  const titleFile = new File(`${titleDir.uri}/title.json`);
-
-  // FIX: Save full metadata to title.json so LibraryScreen can find it
-  await titleFile.write(
-    JSON.stringify(
-      {
-        uid,
-        name: canonicalName,
-        author: edited.author.trim(),
-        tags: edited.tags
-          .split(",")
-          .map((t) => t.trim())
-          .filter(Boolean),
-        genres: edited.genres
-          .split(",")
-          .map((t) => t.trim())
-          .filter(Boolean),
-        source: resolvedMeta.source,
-        addedAt: new Date().toISOString(),
-      },
-      null,
-      2,
-    ),
-  );
-
   log(`📁 uid: ${uid}  («${canonicalName}»)`);
   log(`📁 path: ${chapterDir.uri}`);
 
@@ -235,7 +164,8 @@ export const downloadManga = async (
       if (cancelRef.cancelled) throw new Error("CANCELLED");
 
       const url = resolvedMeta.imageUrls[i];
-      const ext = url.split(".").pop()?.split("?")[0] || "jpg";
+      const dataUrlMatch = url.match(/^data:image\/([^;]+)/);
+      const ext = dataUrlMatch?.[1] || url.split(".").pop()?.split("?")[0] || "jpg";
       const file = new File(`${chapterDir.uri}/${i + 1}.${ext}`);
 
       if (file.exists) {
@@ -252,11 +182,16 @@ export const downloadManga = async (
 
       for (let attempt = 0; attempt < MAX_RETRY; attempt++) {
         try {
-          const res = await fetch(url, {
-            headers: HEADERS[resolvedMeta.source],
-          });
-          if (!res.ok) throw new Error(`HTTP ${res.status}`);
-          await file.write(new Uint8Array(await res.arrayBuffer()));
+          const data = decodeDataUrl(url);
+          if (data) {
+            await file.write(data);
+          } else {
+            const res = await fetch(url, {
+              headers: HEADERS[resolvedMeta.source],
+            });
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            await file.write(new Uint8Array(await res.arrayBuffer()));
+          }
           saved = true;
           break;
         } catch (err) {
@@ -278,30 +213,7 @@ export const downloadManga = async (
       });
     }
 
-    // ── 6. info.json — completion marker ────────────────────────────────────
-    await new File(`${chapterDir.uri}/info.json`).write(
-      JSON.stringify(
-        {
-          uid,
-          name: canonicalName,
-          author: edited.author.trim(),
-          tags: edited.tags
-            .split(",")
-            .map((t) => t.trim())
-            .filter(Boolean),
-          genres: edited.genres
-            .split(",")
-            .map((t) => t.trim())
-            .filter(Boolean),
-          ep,
-          source: resolvedMeta.source,
-          pages: resolvedMeta.imageUrls.length,
-          savedAt: new Date().toISOString(),
-        },
-        null,
-        2,
-      ),
-    );
+    await upsertChapter(uid, ep, resolvedMeta.imageUrls.length, new Date().toISOString());
 
     log(`🎉 Done: ${chapterDir.uri}`);
     return chapterDir.uri;
@@ -318,11 +230,7 @@ export const downloadManga = async (
     if (isNewTitle) {
       try {
         await withLock(async () => {
-          const entries = await readIndex(root);
-          await writeIndex(
-            root,
-            entries.filter((e) => e.uid !== uid),
-          );
+          await deleteManga(uid);
         });
       } catch {
         /* best-effort */

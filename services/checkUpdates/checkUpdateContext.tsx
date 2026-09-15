@@ -7,7 +7,7 @@ interface CheckUpdateContextType {
   currentVersion: string;
   error: string | null;
   checkForUpdates: () => Promise<void>; // Function to trigger update check
-  isUpdateAvailable: boolean | true;
+  isUpdateAvailable: boolean;
   status?: string;
 }
 
@@ -18,6 +18,6 @@ export const CheckUpdateContext = createContext<CheckUpdateContextType>({
   currentVersion: process.env.EXPO_PUBLIC_APP_VERSION || "0.0.1",
   error: null,
   checkForUpdates: async () => {},
-  isUpdateAvailable: true,
+  isUpdateAvailable: false,
   status: ""
 });

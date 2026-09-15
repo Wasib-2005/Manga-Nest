@@ -69,15 +69,6 @@ export const CheckUpdateProvider = ({ children }: ProviderProps) => {
     }
   };
 
-  console.log(
-    "CheckUpdateProvider Rendered - Current:",
-    currentVersionEnv,
-    "Latest:",
-    latestVersion,
-    "Update Available:",
-    isUpdateAvailable
-  );
-
   useEffect(() => {
     checkForUpdates();
   }, []);

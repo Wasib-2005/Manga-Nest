@@ -84,13 +84,14 @@ For restoration to succeed, the selected folder must contain:
 
 ```
 your-backup-folder/
-├── 7a916.../          ← Hash-named subfolders holding manga image assets
+├── 7a916.../          ← Manga folders holding chapter image assets
 ├── jg4.../
-└── index.json         ← REQUIRED — maps library metadata
+└── SQLite/
+    └── library.db     ← Relational library metadata
 ```
 
 > [!IMPORTANT]
-> `index.json` is mandatory. Without it, the restore will fail. `.nomedia` files are optional and will not interfere.
+> `SQLite/library.db` contains the library metadata. Older JSON backups are imported automatically once on app startup.
 
 ---
 

@@ -1,16 +1,17 @@
 import React, { useRef, useEffect } from "react";
 import {
-  View, Text, ScrollView, ActivityIndicator, StyleSheet,Platform
+  View, Text, ScrollView, ActivityIndicator, StyleSheet, Platform,
+  TouchableOpacity,
 } from "react-native";
 
 
 interface Props {
   logs:     string[];
   loading?: boolean;
+  onClear?: () => void;
 }
 
-export const LogConsole = ({ logs, loading }: Props) => {
-  console.log(logs)
+export const LogConsole = ({ logs, loading, onClear }: Props) => {
   const scrollRef = useRef<ScrollView>(null);
 
   useEffect(() => {
@@ -24,6 +25,17 @@ export const LogConsole = ({ logs, loading }: Props) => {
         <View style={s.dot} />
         <Text style={s.title}>console</Text>
         {loading && <ActivityIndicator color="#38D926" size="small" style={{ marginLeft: "auto" }} />}
+        {onClear && (
+          <TouchableOpacity
+            onPress={onClear}
+            disabled={loading || logs.length === 0}
+            style={s.clearButton}
+          >
+            <Text style={[s.clearText, (loading || logs.length === 0) && s.clearTextDisabled]}>
+              CLEAR
+            </Text>
+          </TouchableOpacity>
+        )}
       </View>
       <ScrollView
         ref={scrollRef}
@@ -73,6 +85,21 @@ const s = StyleSheet.create({
     letterSpacing: 1.5,
     fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
   },
+  clearButton: {
+    marginLeft: "auto",
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 5,
+    borderWidth: 1,
+    borderColor: "#1e293b",
+  },
+  clearText: {
+    color: "#94a3b8",
+    fontSize: 8,
+    fontWeight: "800",
+    letterSpacing: 1,
+  },
+  clearTextDisabled: { color: "#334155" },
   scroll: { maxHeight: 200 },
   scrollContent: { padding: 12, gap: 3 },
   line: {

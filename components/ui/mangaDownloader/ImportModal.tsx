@@ -25,8 +25,8 @@ import {
   pickImages,
   importFromImages,
   resolveOrCreateEntry,
-  writeTitleJson,
-  writeInfoJson,
+  writeTitleMetadata,
+  writeChapterMetadata,
   savePageFromDataUrl,
   ImportMeta,
   ImportProgress,
@@ -188,7 +188,7 @@ export const ImportModal = ({ visible, onClose, onDone }: Props) => {
   const uidRef           = useRef<string>("");
   const pagesWrittenRef  = useRef(0);
   const cancelRef        = useRef({ cancelled: false });
-  const shakeAnim        = useRef(new Animated.Value(0)).current;
+  const [shakeAnim]      = useState(() => new Animated.Value(0));
   const metaRef          = useRef<ImportMeta>(EMPTY);
 
   const log = (msg: string) => setLogs((p) => [...p.slice(-199), msg]);
@@ -316,8 +316,7 @@ export const ImportModal = ({ visible, onClose, onDone }: Props) => {
 
       console.log("✅ chapterDirUri:", chapterDirUriRef.current);
 
-      // ✅ writeTitleJson takes (Directory, uid, meta, source)
-      await writeTitleJson(titleDir, uid, meta, "pdf");
+      await writeTitleMetadata(titleDir, uid, meta, "pdf");
 
       pagesWrittenRef.current = 0;
       log("📄 Starting page extraction…");
@@ -349,8 +348,7 @@ export const ImportModal = ({ visible, onClose, onDone }: Props) => {
     setExtracting(false);
     try {
       const m = metaRef.current;
-      // ✅ writeInfoJson takes (ChapterDir, uid, meta, source, pageCount)
-      await writeInfoJson(chapterDirRef.current!, uidRef.current, m, "pdf", total);
+      await writeChapterMetadata(chapterDirRef.current!, uidRef.current, m, "pdf", total);
       log(`🎉 PDF import complete — ${total} pages`);
       setPhase("done");
       onDone?.(chapterDirUriRef.current);
@@ -404,7 +402,8 @@ export const ImportModal = ({ visible, onClose, onDone }: Props) => {
 
       <View style={s.backdrop}>
         <KeyboardAvoidingView
-          behavior={Platform.OS === "ios" ? "padding" : undefined}
+          behavior={Platform.OS === "ios" ? "padding" : "height"}
+          keyboardVerticalOffset={Platform.OS === "ios" ? 8 : 0}
           style={{ width: "100%" }}
         >
           <View style={s.sheet}>
@@ -474,7 +473,7 @@ export const ImportModal = ({ visible, onClose, onDone }: Props) => {
                     </View>
                     {logs.length > 0 && (
                       <View style={{ width: "100%", marginTop: 8 }}>
-                        <LogConsole logs={logs} loading={false} />
+                        <LogConsole logs={logs} loading={false} onClear={() => setLogs([])} />
                       </View>
                     )}
                   </View>
@@ -525,7 +524,7 @@ export const ImportModal = ({ visible, onClose, onDone }: Props) => {
                         <ProgressBar current={progress.current} total={progress.total} />
                       )}
                     </View>
-                    <LogConsole logs={logs} loading={isImporting} />
+                    <LogConsole logs={logs} loading={isImporting} onClear={() => setLogs([])} />
                   </>
                 )}
 

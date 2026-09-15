@@ -7,6 +7,8 @@ import {
   Platform,
   StatusBar,
   ScrollView,
+  TextInput,
+  KeyboardAvoidingView,
 } from "react-native";
 import Animated, {
   useSharedValue,
@@ -15,6 +17,7 @@ import Animated, {
 } from "react-native-reanimated";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 
 import { PageViewer, type ViewMode, type PageViewerHandle } from "./pageViewer";
 import { SettingsModal } from "./settingsModal";
@@ -32,11 +35,14 @@ interface Props {
   chapterLabel: string;
   onClose: () => void;
   onPageChange?: (page: number) => void;
+  onFinish?: () => void;
   mangaUid: string;
   currentEp: any;
 }
 
 const AUTO_HIDE_DELAY = 3000;
+const READER_PAGE_PADDING_KEY = "reader_page_padding";
+const MAX_PAGE_PADDING = 10;
 
 // ── Page Box Progress Bar ─────────────────────────────────────────────────────
 
@@ -199,13 +205,16 @@ export const ReaderScreen = ({
   mangaName,
   onClose,
   onPageChange,
+  onFinish,
   mangaUid,
   currentEp,
   chapterLabel
 }: Props) => {
   const insets = useSafeAreaInsets();
   const [currentPage, setCurrentPage] = useState(initialPage);
+  const [pageInput, setPageInput] = useState(String(initialPage + 1));
   const [settingsVisible, setSettingsVisible] = useState(false);
+  const [pagePadding, setPagePadding] = useState(0);
 
   // Ref to PageViewer so we can call jumpToPage imperatively
   const viewerRef = useRef<PageViewerHandle>(null);
@@ -213,7 +222,23 @@ export const ReaderScreen = ({
   // Sync display page when a new chapter is opened
   useEffect(() => {
     setCurrentPage(initialPage);
+    setPageInput(String(initialPage + 1));
   }, [initialPage, pages]);
+
+  useEffect(() => {
+    AsyncStorage.getItem(READER_PAGE_PADDING_KEY).then((stored) => {
+      const parsed = Number(stored);
+      if (Number.isFinite(parsed)) {
+        setPagePadding(Math.min(MAX_PAGE_PADDING, Math.max(0, parsed)));
+      }
+    });
+  }, []);
+
+  const handlePagePaddingChange = useCallback((value: number) => {
+    const next = Math.min(MAX_PAGE_PADDING, Math.max(0, Math.round(value)));
+    setPagePadding(next);
+    void AsyncStorage.setItem(READER_PAGE_PADDING_KEY, String(next));
+  }, []);
 
   // UI overlay visibility
   const uiVisible = useSharedValue(1);
@@ -259,6 +284,7 @@ export const ReaderScreen = ({
   const handlePageChange = useCallback(
     (idx: number) => {
       setCurrentPage(idx);
+      setPageInput(String(idx + 1));
       onPageChange?.(idx);
     },
     [onPageChange],
@@ -277,7 +303,10 @@ export const ReaderScreen = ({
   );
 
   return (
-    <View style={styles.root}>
+    <KeyboardAvoidingView
+      style={styles.root}
+      behavior={Platform.OS === "ios" ? "padding" : "height"}
+    >
       <StatusBar hidden />
 
       {/* ── Pages ── */}
@@ -290,6 +319,8 @@ export const ReaderScreen = ({
         autoPlay={autoPlay}
         autoPlaySpeed={autoPlaySpeed}
         onToggleUI={handleToggleUI}
+        onFinish={onFinish}
+        pagePadding={pagePadding}
       />
 
       {/* ── Header overlay ── */}
@@ -333,6 +364,32 @@ export const ReaderScreen = ({
         ]}
         pointerEvents={uiShown ? "auto" : "none"}
       >
+        <View style={styles.footerActions}>
+          <TouchableOpacity onPress={() => handleJumpToPage(0)} style={styles.footerAction}>
+            <MaterialCommunityIcons name="page-first" size={17} color="#f1f5f9" />
+            <Text style={styles.footerActionText}>First</Text>
+          </TouchableOpacity>
+          <TextInput
+            value={pageInput}
+            onChangeText={(value) => setPageInput(value.replace(/[^0-9]/g, ""))}
+            onSubmitEditing={() => {
+              const page = Number(pageInput);
+              if (page >= 1 && page <= pages.length) handleJumpToPage(page - 1);
+              else setPageInput(String(currentPage + 1));
+            }}
+            keyboardType="number-pad"
+            returnKeyType="go"
+            selectTextOnFocus
+            style={styles.footerPageInput}
+          />
+          <TouchableOpacity
+            onPress={() => handleJumpToPage(pages.length - 1)}
+            style={styles.footerAction}
+          >
+            <Text style={styles.footerActionText}>Last</Text>
+            <MaterialCommunityIcons name="page-last" size={17} color="#f1f5f9" />
+          </TouchableOpacity>
+        </View>
         <PageBoxBar current={currentPage} total={pages.length} />
       </Animated.View>
       {/* ── Settings modal ── */}
@@ -350,8 +407,10 @@ export const ReaderScreen = ({
         onJumpToPage={handleJumpToPage}
         mangaUid={mangaUid}
         currentEp={currentEp}
+        pagePadding={pagePadding}
+        onPagePaddingChange={handlePagePaddingChange}
       />
-    </View>
+    </KeyboardAvoidingView>
   );
 };
 
@@ -405,5 +464,36 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(0,0,0,0.72)",
     borderTopWidth: 1,
     borderTopColor: "rgba(56,217,38,0.08)",
+  },
+  footerActions: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 10,
+  },
+  footerAction: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: 11,
+    paddingVertical: 7,
+    borderRadius: 9,
+    backgroundColor: "rgba(255,255,255,0.08)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.1)",
+  },
+  footerActionText: { color: "#f1f5f9", fontSize: 11, fontWeight: "800" },
+  footerPageInput: {
+    width: 58,
+    height: 34,
+    borderRadius: 9,
+    borderWidth: 1,
+    borderColor: "rgba(56,217,38,0.4)",
+    backgroundColor: "rgba(56,217,38,0.1)",
+    color: "#38D926",
+    fontSize: 14,
+    fontWeight: "900",
+    textAlign: "center",
+    paddingVertical: 0,
   },
 });
