@@ -38,6 +38,7 @@ interface Props {
   onFinish?: () => void;
   mangaUid: string;
   currentEp: any;
+  onReplacePageImage?: (pageIndex: number, newUri: string) => Promise<void>;
 }
 
 const AUTO_HIDE_DELAY = 3000;
@@ -208,7 +209,8 @@ export const ReaderScreen = ({
   onFinish,
   mangaUid,
   currentEp,
-  chapterLabel
+  chapterLabel,
+  onReplacePageImage,
 }: Props) => {
   const insets = useSafeAreaInsets();
   const [currentPage, setCurrentPage] = useState(initialPage);
@@ -409,6 +411,7 @@ export const ReaderScreen = ({
         currentEp={currentEp}
         pagePadding={pagePadding}
         onPagePaddingChange={handlePagePaddingChange}
+        onReplacePageImage={onReplacePageImage}
       />
     </KeyboardAvoidingView>
   );

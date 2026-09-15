@@ -14,6 +14,7 @@ import {
   Modal,
   StyleSheet,
 } from "react-native";
+import { Image as ExpoImage } from "expo-image";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import {
@@ -177,10 +178,12 @@ const AutoHeightImage = React.memo(({ uri }: { uri: string }) => {
     return () => { mounted = false; };
   }, [uri]);
   return (
-    <Image
+    <ExpoImage
       source={{ uri: `file://${uri}` }}
       style={{ width: "100%", aspectRatio, maxHeight: SCREEN_HEIGHT * 0.6, borderRadius: 12, backgroundColor: "#0f172a" }}
-      resizeMode="cover"
+      contentFit="cover"
+      transition={120}
+      cachePolicy="memory-disk"
     />
   );
 });
@@ -203,7 +206,13 @@ const CoverImage = React.memo(({
       </View>
     );
   return autoHeight ? <AutoHeightImage uri={uri} /> : (
-    <Image source={{ uri: `file://${uri}` }} style={{ width: "100%", height, borderRadius: 8 }} resizeMode="cover" />
+    <ExpoImage
+      source={{ uri: `file://${uri}` }}
+      style={{ width: "100%", height, borderRadius: 8 }}
+      contentFit="cover"
+      transition={120}
+      cachePolicy="memory-disk"
+    />
   );
 });
 CoverImage.displayName = "CoverImage";
@@ -682,6 +691,53 @@ export const LibraryScreen = ({
   }, [loadMore, totalItems, visibleCount]);
 
   const numColumns = layout === "grid" ? 2 : layout === "compact" ? 4 : 1;
+  const itemWidth = useMemo(
+    () => (numColumns === 1 ? ("100%" as const) : (SCREEN_WIDTH - (numColumns + 1) * 12) / numColumns),
+    [numColumns]
+  );
+
+  const renderFlatItem = useCallback(
+    ({ item }: { item: FlatItem }) => (
+      <TouchableOpacity
+        style={{ width: itemWidth }}
+        onPress={() => onSelectManga(item.manga, item.chapter.ep)}
+        onLongPress={() =>
+          Alert.alert("Options", `${item.manga.name} — EP ${item.chapter.ep}`, [
+            { text: "Edit Manga Metadata", onPress: () => setEditingManga(item.manga) },
+            { text: "Delete This Chapter", style: "destructive", onPress: () => onDeleteChapter(item.manga.uid, item.chapter.ep) },
+            { text: "Delete Entire Manga", style: "destructive", onPress: () => onDeleteManga(item.manga.uid) },
+            { text: "Cancel", style: "cancel" },
+          ])
+        }
+      >
+        <FlatCard item={item} mode={layout} recentEntry={recentMap.get(item.manga.uid)} />
+      </TouchableOpacity>
+    ),
+    [itemWidth, onSelectManga, onDeleteChapter, onDeleteManga, layout, recentMap]
+  );
+
+  const renderMangaItem = useCallback(
+    ({ item }: { item: MangaEntry }) => (
+      <TouchableOpacity
+        style={{ width: itemWidth }}
+        onPress={() =>
+          item.chapters.length === 1
+            ? onSelectManga(item, item.chapters[0].ep)
+            : setPickerManga(item)
+        }
+        onLongPress={() =>
+          Alert.alert("Options", item.name, [
+            { text: "Edit Metadata", onPress: () => setEditingManga(item) },
+            { text: "Delete Library Entry", style: "destructive", onPress: () => onDeleteManga(item.uid) },
+            { text: "Cancel", style: "cancel" },
+          ])
+        }
+      >
+        <AdaptiveCard item={item} mode={layout} recentEntry={recentMap.get(item.uid)} />
+      </TouchableOpacity>
+    ),
+    [itemWidth, onSelectManga, onDeleteManga, layout, recentMap]
+  );
   const layoutLabel = layout === "hero" ? "Big cards" : layout === "list" ? "List" : layout === "grid" ? "2 columns" : "4 columns";
   const chromeStyle = useAnimatedStyle(() => ({
     opacity: withTiming(chromeVisible ? 1 : 0, { duration: 180 }),
@@ -868,22 +924,7 @@ export const LibraryScreen = ({
           onEndReached={handleEndReached}
           onEndReachedThreshold={0.5}
           ListFooterComponent={<LoadMoreFooter loaded={pagedData.length} total={totalItems} onLoadMore={loadMore} onTop={() => listRef.current?.scrollToOffset({ offset: 0, animated: true })} />}
-          renderItem={({ item }: { item: FlatItem }) => (
-            <TouchableOpacity
-              style={{ width: numColumns === 1 ? "100%" : (SCREEN_WIDTH - (numColumns + 1) * 12) / numColumns }}
-              onPress={() => onSelectManga(item.manga, item.chapter.ep)}
-              onLongPress={() =>
-                Alert.alert("Options", `${item.manga.name} — EP ${item.chapter.ep}`, [
-                  { text: "Edit Manga Metadata",  onPress: () => setEditingManga(item.manga) },
-                  { text: "Delete This Chapter",  style: "destructive", onPress: () => onDeleteChapter(item.manga.uid, item.chapter.ep) },
-                  { text: "Delete Entire Manga",  style: "destructive", onPress: () => onDeleteManga(item.manga.uid) },
-                  { text: "Cancel", style: "cancel" },
-                ])
-              }
-            >
-              <FlatCard item={item} mode={layout} recentEntry={recentMap.get(item.manga.uid)} />
-            </TouchableOpacity>
-          )}
+          renderItem={renderFlatItem}
         />
       ) : (
         <FlatList
@@ -907,25 +948,7 @@ export const LibraryScreen = ({
           onEndReached={handleEndReached}
           onEndReachedThreshold={0.5}
           ListFooterComponent={<LoadMoreFooter loaded={pagedData.length} total={totalItems} onLoadMore={loadMore} onTop={() => listRef.current?.scrollToOffset({ offset: 0, animated: true })} />}
-          renderItem={({ item }: { item: MangaEntry }) => (
-            <TouchableOpacity
-              style={{ width: numColumns === 1 ? "100%" : (SCREEN_WIDTH - (numColumns + 1) * 12) / numColumns }}
-              onPress={() =>
-                item.chapters.length === 1
-                  ? onSelectManga(item, item.chapters[0].ep)
-                  : setPickerManga(item)
-              }
-              onLongPress={() =>
-                Alert.alert("Options", item.name, [
-                  { text: "Edit Metadata",        onPress: () => setEditingManga(item) },
-                  { text: "Delete Library Entry", style: "destructive", onPress: () => onDeleteManga(item.uid) },
-                  { text: "Cancel", style: "cancel" },
-                ])
-              }
-            >
-              <AdaptiveCard item={item} mode={layout} recentEntry={recentMap.get(item.uid)} />
-            </TouchableOpacity>
-          )}
+          renderItem={renderMangaItem}
         />
       )}
 

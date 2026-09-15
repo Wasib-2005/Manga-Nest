@@ -11,6 +11,7 @@ import {
   ListRenderItemInfo,
   Text,
 } from "react-native";
+import { Image as ExpoImage } from "expo-image";
 
 import {
   Gesture,
@@ -169,12 +170,12 @@ const VerticalPage = React.memo(function VerticalPage({
           zoomStyle,
         ]}
       >
-        <Image
+        <ExpoImage
           source={{ uri: `file://${uri}` }}
           style={{ width: contentWidth, height: imgHeight, backgroundColor: "#000" }}
-          resizeMode="stretch"
-          resizeMethod="resize"
-          fadeDuration={0}
+          contentFit="fill"
+          cachePolicy="memory-disk"
+          transition={100}
         />
       </Animated.View>
     </GestureDetector>
@@ -427,10 +428,12 @@ const ZoomPage = React.memo(function ZoomPage({
           slideshowStyle,
         ]}
       >
-        <Image
+        <ExpoImage
           source={{ uri: `file://${uri}` }}
           style={{ width: SW - pagePadding * 2, height: SH - pagePadding * 2 }}
-          resizeMode="contain"
+          contentFit="contain"
+          cachePolicy="memory-disk"
+          transition={100}
         />
       </Animated.View>
     </GestureDetector>
@@ -698,6 +701,10 @@ export const PageViewer = forwardRef<PageViewerHandle, Props>(function PageViewe
         scrollEventThrottle={16}
         viewabilityConfig={viewabilityConfig}
         getItemLayout={(_, i) => ({ length: SW, offset: SW * i, index: i })}
+        initialNumToRender={2}
+        maxToRenderPerBatch={2}
+        windowSize={5}
+        removeClippedSubviews={true}
         onScrollToIndexFailed={(info) => {
           flatRef.current?.scrollToOffset({
             offset: info.averageItemLength * info.index,

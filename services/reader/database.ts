@@ -26,6 +26,7 @@ export interface DbChapter {
 const root = () => new Directory(Paths.document, "manga");
 const databaseName = "library.db";
 let databasePromise: Promise<SQLiteDatabase> | null = null;
+let initPromise: Promise<SQLiteDatabase> | null = null;
 
 export async function serializeDatabase(): Promise<Uint8Array> {
   const db = await initializeDatabase();
@@ -155,16 +156,20 @@ async function replaceMangaRelations(
   const table = kind === "tag" ? "tags" : "genres";
   const joinTable = kind === "tag" ? "manga_tags" : "manga_genres";
   await db.runAsync(`DELETE FROM ${joinTable} WHERE uid = ?`, uid);
+  if (!values || values.length === 0) return;
   for (const value of values) {
+    const trimmed = value.trim();
+    if (!trimmed) continue;
+    const key = normalize(trimmed);
     await db.runAsync(
       `INSERT INTO ${table} (name, name_key) VALUES (?, ?)
        ON CONFLICT(name_key) DO UPDATE SET name = excluded.name`,
-      value,
-      normalize(value),
+      trimmed,
+      key,
     );
     const row = await db.getFirstAsync<{ id: number }>(
       `SELECT id FROM ${table} WHERE name_key = ?`,
-      normalize(value),
+      key,
     );
     if (!row) {
       throw new Error(`Could not resolve ${kind} "${value}" after upsert`);
@@ -178,54 +183,61 @@ async function replaceMangaRelations(
 }
 
 export async function initializeDatabase(): Promise<SQLiteDatabase> {
-  const mangaRoot = root();
-  if (!mangaRoot.exists) mangaRoot.create({ intermediates: true });
-  const db = await getDatabase();
-  await db.execAsync(`
-    PRAGMA foreign_keys = ON;
-    CREATE TABLE IF NOT EXISTS manga (
-      uid TEXT PRIMARY KEY NOT NULL,
-      name TEXT NOT NULL,
-      name_key TEXT NOT NULL UNIQUE,
-      author TEXT NOT NULL DEFAULT '',
-      source TEXT NOT NULL,
-      added_at TEXT NOT NULL,
-      title_page_ep TEXT,
-      title_page_num INTEGER
-    );
-    CREATE TABLE IF NOT EXISTS chapters (
-      uid TEXT NOT NULL REFERENCES manga(uid) ON DELETE CASCADE,
-      ep TEXT NOT NULL,
-      pages INTEGER NOT NULL DEFAULT 0,
-      saved_at TEXT NOT NULL,
-      PRIMARY KEY (uid, ep)
-    );
-    CREATE TABLE IF NOT EXISTS tags (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT NOT NULL,
-      name_key TEXT NOT NULL UNIQUE
-    );
-    CREATE TABLE IF NOT EXISTS genres (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT NOT NULL,
-      name_key TEXT NOT NULL UNIQUE
-    );
-    CREATE TABLE IF NOT EXISTS manga_tags (
-      uid TEXT NOT NULL REFERENCES manga(uid) ON DELETE CASCADE,
-      tag_id INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
-      PRIMARY KEY (uid, tag_id)
-    );
-    CREATE TABLE IF NOT EXISTS manga_genres (
-      uid TEXT NOT NULL REFERENCES manga(uid) ON DELETE CASCADE,
-      genre_id INTEGER NOT NULL REFERENCES genres(id) ON DELETE CASCADE,
-      PRIMARY KEY (uid, genre_id)
-    );
-    CREATE INDEX IF NOT EXISTS chapters_uid_idx ON chapters(uid);
-    CREATE INDEX IF NOT EXISTS manga_tags_uid_idx ON manga_tags(uid);
-    CREATE INDEX IF NOT EXISTS manga_genres_uid_idx ON manga_genres(uid);
-  `);
-  await migrateLegacyJson(db);
-  return db;
+  if (initPromise) return initPromise;
+  initPromise = (async () => {
+    const mangaRoot = root();
+    if (!mangaRoot.exists) mangaRoot.create({ intermediates: true });
+    const db = await getDatabase();
+    await db.execAsync(`
+      PRAGMA journal_mode = WAL;
+      PRAGMA synchronous = NORMAL;
+      PRAGMA foreign_keys = ON;
+      CREATE TABLE IF NOT EXISTS manga (
+        uid TEXT PRIMARY KEY NOT NULL,
+        name TEXT NOT NULL,
+        name_key TEXT NOT NULL UNIQUE,
+        author TEXT NOT NULL DEFAULT '',
+        source TEXT NOT NULL,
+        added_at TEXT NOT NULL,
+        title_page_ep TEXT,
+        title_page_num INTEGER
+      );
+      CREATE TABLE IF NOT EXISTS chapters (
+        uid TEXT NOT NULL REFERENCES manga(uid) ON DELETE CASCADE,
+        ep TEXT NOT NULL,
+        pages INTEGER NOT NULL DEFAULT 0,
+        saved_at TEXT NOT NULL,
+        PRIMARY KEY (uid, ep)
+      );
+      CREATE TABLE IF NOT EXISTS tags (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        name_key TEXT NOT NULL UNIQUE
+      );
+      CREATE TABLE IF NOT EXISTS genres (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        name_key TEXT NOT NULL UNIQUE
+      );
+      CREATE TABLE IF NOT EXISTS manga_tags (
+        uid TEXT NOT NULL REFERENCES manga(uid) ON DELETE CASCADE,
+        tag_id INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
+        PRIMARY KEY (uid, tag_id)
+      );
+      CREATE TABLE IF NOT EXISTS manga_genres (
+        uid TEXT NOT NULL REFERENCES manga(uid) ON DELETE CASCADE,
+        genre_id INTEGER NOT NULL REFERENCES genres(id) ON DELETE CASCADE,
+        PRIMARY KEY (uid, genre_id)
+      );
+      CREATE INDEX IF NOT EXISTS chapters_uid_idx ON chapters(uid);
+      CREATE INDEX IF NOT EXISTS chapters_uid_saved_at_idx ON chapters(uid, saved_at);
+      CREATE INDEX IF NOT EXISTS manga_tags_uid_idx ON manga_tags(uid);
+      CREATE INDEX IF NOT EXISTS manga_genres_uid_idx ON manga_genres(uid);
+    `);
+    await migrateLegacyJson(db);
+    return db;
+  })();
+  return initPromise;
 }
 
 export async function closeDatabase(): Promise<void> {
@@ -233,6 +245,7 @@ export async function closeDatabase(): Promise<void> {
   const db = await databasePromise;
   await db.closeAsync();
   databasePromise = null;
+  initPromise = null;
 }
 
 export async function findMangaByName(name: string): Promise<DbManga | null> {

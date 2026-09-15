@@ -1,4 +1,5 @@
-import { Directory, Paths } from "expo-file-system";
+import { Directory, File, Paths } from "expo-file-system";
+import * as FileSystemLegacy from "expo-file-system/legacy";
 import {
   clearTitlePage as clearTitlePageDb,
   deleteChapter,
@@ -24,7 +25,16 @@ export interface MangaEntry {
   source: "nhentai" | "mangadex" | "sequential" | "hentaicity" | "hentaiera" | "local";
   addedAt: string;
   chapters: ChapterInfo[];
+  titlePageEp?: string | null;
+  titlePageNum?: number | null;
 }
+
+const coverCache = new Map<string, string>();
+
+export const invalidateCover = (uid?: string) => {
+  if (uid) coverCache.delete(uid);
+  else coverCache.clear();
+};
 
 const getRoot = () => new Directory(Paths.document, "manga");
 
@@ -42,6 +52,8 @@ export const readMangaLibrary = async (): Promise<MangaEntry[]> => {
       source: manga.source,
       addedAt: manga.addedAt,
       chapters: manga.chapters,
+      titlePageEp: manga.titlePageEp,
+      titlePageNum: manga.titlePageNum,
     }));
   } catch (err) {
     console.error("Library Read Error:", err);
@@ -106,8 +118,8 @@ export const setTitlePage = async (
   ep: string,
   pageNum: number, // 0-based index into the pages array
 ): Promise<void> => {
-
   await updateManga(uid, { titlePageEp: ep, titlePageNum: pageNum });
+  invalidateCover(uid);
 };
 
 /**
@@ -115,19 +127,24 @@ export const setTitlePage = async (
  */
 export const clearTitlePage = async (uid: string): Promise<void> => {
   await clearTitlePageDb(uid);
+  invalidateCover(uid);
 };
 
 /**
  * Returns the URI of the title page image.
  *
  * Priority:
- *  1. SQLite title-page relation
- *  2. First numerically-sorted image in firstEp folder (original behaviour)
+ *  1. In-memory cache
+ *  2. SQLite title-page relation
+ *  3. First numerically-sorted image in firstEp folder
  */
 export const getFirstPageUri = async (
   uid: string,
   firstEp: string,
 ): Promise<string | null> => {
+  const cached = coverCache.get(uid);
+  if (cached) return cached;
+
   try {
     const root = getRoot();
     const mangaDir = new Directory(root, uid);
@@ -143,7 +160,10 @@ export const getFirstPageUri = async (
     if (titlePage?.titlePageEp && titlePage.titlePageNum !== null) {
       const pages = await getChapterPages(uid, titlePage.titlePageEp);
       const uri = pages[titlePage.titlePageNum] ?? pages[0] ?? null;
-      if (uri) return uri;
+      if (uri) {
+        coverCache.set(uid, uri);
+        return uri;
+      }
     }
 
     // ── 2. Default: first image in firstEp ───────────────────────────────
@@ -158,7 +178,9 @@ export const getFirstPageUri = async (
       const num = parseInt(match[1], 10);
       if (!best || num < best.num) best = { num, uri: file.uri };
     }
-    return best?.uri ?? null;
+    const result = best?.uri ?? null;
+    if (result) coverCache.set(uid, result);
+    return result;
   } catch {
     return null;
   }
@@ -177,6 +199,7 @@ export const renameChapterEp = async (
   if (oldDir.exists && !newDir.exists) {
     await oldDir.move(newDir);
     await renameChapter(uid, oldEp, newEp);
+    invalidateCover(uid);
   }
 };
 
@@ -184,6 +207,7 @@ export const deleteFullManga = async (uid: string) => {
   const root = getRoot();
   const titleDir = new Directory(root, uid);
   await deleteManga(uid);
+  invalidateCover(uid);
   if (titleDir.exists) titleDir.delete();
 };
 
@@ -194,6 +218,7 @@ export const deleteChapterFiles = async (
   const titleDir = new Directory(getRoot(), uid);
   const chapterDir = new Directory(titleDir, ep);
   if (chapterDir.exists) chapterDir.delete();
+  invalidateCover(uid);
 
   const remaining = titleDir.list().filter((item) => item instanceof Directory);
   if (remaining.length === 0) {
@@ -202,6 +227,50 @@ export const deleteChapterFiles = async (
   }
   await deleteChapter(uid, ep);
   return false;
+};
+
+/**
+ * Replaces a page image file with a new image from the local filesystem or picker.
+ */
+export const replacePageImage = async (
+  uid: string,
+  ep: string,
+  pageIndex: number,
+  newImageUri: string,
+): Promise<string[]> => {
+  const root = getRoot();
+  const titleDir = new Directory(root, uid);
+  const chapterDir = new Directory(titleDir, ep);
+  if (!chapterDir.exists) throw new Error("Chapter directory does not exist");
+
+  const currentPages = await getChapterPages(uid, ep);
+  if (pageIndex < 0 || pageIndex >= currentPages.length) {
+    throw new Error("Invalid page index");
+  }
+
+  const currentUri = currentPages[pageIndex];
+  const currentFileName = currentUri.split("/").pop() || `${pageIndex + 1}.jpg`;
+  const numMatch = currentFileName.match(/^(\d+)\./);
+  const pageNum = numMatch ? numMatch[1] : `${pageIndex + 1}`;
+
+  const extMatch = newImageUri.match(/\.(jpg|jpeg|png|webp|gif)$/i);
+  const newExt = extMatch ? extMatch[1].toLowerCase() : "jpg";
+  const targetFile = new File(chapterDir, `${pageNum}.${newExt}`);
+
+  const currentFile = new File(currentUri);
+  if (currentFile.exists && currentFile.uri !== targetFile.uri) {
+    currentFile.delete();
+  } else if (targetFile.exists) {
+    targetFile.delete();
+  }
+
+  await FileSystemLegacy.copyAsync({
+    from: newImageUri,
+    to: targetFile.uri,
+  });
+
+  invalidateCover(uid);
+  return getChapterPages(uid, ep);
 };
 
 /** Search helper used by the UI */

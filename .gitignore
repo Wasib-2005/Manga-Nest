@@ -43,3 +43,33 @@ app-example
 /android
 build*
 *apk
+
+# Environment files (prevent accidental API key leaks)
+.env
+.env.*
+!.env.example
+
+# Fastlane (iOS/Android deployment logs and keys)
+fastlane/report.xml
+fastlane/Preview.html
+fastlane/readme.md
+
+# Xcode/iOS local user settings
+*.xcodeproj/*
+!*.xcodeproj/project.pbxproj
+!*.xcodeproj/xcshareddata/
+*.xcworkspace/*
+!*.xcworkspace/contents.xcworkmapped
+Pods/
+
+# Gradle & Android caches
+.gradle/
+local.properties
+
+# Bundles & Logs
+*.jsbundle
+*.log
+
+# Editor directories
+.vscode/
+.idea/

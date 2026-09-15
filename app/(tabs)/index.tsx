@@ -6,6 +6,7 @@ import { HiddenMangaModal } from "../../components/ui/reader/hiddenMangaModal";
 import {
   getChapterPages,
   renameChapterEp,
+  replacePageImage,
   type MangaEntry,
 } from "../../services/reader/libraryService";
 import {
@@ -123,6 +124,26 @@ export default function Index() {
   const handleChapterFinished = useCallback(() => {
     handleBack();
   }, [handleBack]);
+
+  const handleReplacePageImage = useCallback(
+    async (pageIndex: number, newUri: string) => {
+      if (!selectedManga || !selectedChapter) return;
+      try {
+        const updatedPages = await replacePageImage(
+          selectedManga.uid,
+          selectedChapter,
+          pageIndex,
+          newUri,
+        );
+        setPages(updatedPages);
+        setLibraryRefreshKey((prev) => prev + 1);
+      } catch (err) {
+        console.error("Failed to replace page image:", err);
+        Alert.alert("Error", "Could not replace page image.");
+      }
+    },
+    [selectedManga, selectedChapter],
+  );
 
   // ── Deletion (these DO need a library refresh) ────────────────────────────
   const onDeleteChapter = useCallback(
@@ -245,7 +266,7 @@ export default function Index() {
             onClose={handleBack}
             onPageChange={handlePageChange}
             onFinish={handleChapterFinished}
-            
+            onReplacePageImage={handleReplacePageImage}
           />
           <HiddenMangaModal
             visible={hideVisible}

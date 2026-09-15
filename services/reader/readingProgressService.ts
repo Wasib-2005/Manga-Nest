@@ -59,10 +59,43 @@ const simpleHash = (str: string): string => {
 
 // ─── Reading progress ─────────────────────────────────────────────────────────
 
+let pendingSyncTimer: ReturnType<typeof setTimeout> | null = null;
+let pendingSyncPayload: {
+  uid: string;
+  ep: string;
+  page: number;
+  totalPages: number;
+} | null = null;
+
+export const flushReadingProgressSync = async (): Promise<void> => {
+  if (!pendingSyncPayload) return;
+  const payload = pendingSyncPayload;
+  pendingSyncPayload = null;
+
+  try {
+    const existing = await AsyncStorage.getItem(LEGACY_PROGRESS_KEY);
+    const progress: ReadingProgress[] = existing ? JSON.parse(existing) : [];
+    const idx = progress.findIndex((p) => p.uid === payload.uid && p.ep === payload.ep);
+    const entry: ReadingProgress = {
+      uid: payload.uid,
+      ep: payload.ep,
+      currentPage: payload.page,
+      timestamp: new Date().toISOString(),
+    };
+    if (idx >= 0) progress[idx] = entry;
+    else progress.push(entry);
+    await AsyncStorage.setItem(LEGACY_PROGRESS_KEY, JSON.stringify(progress));
+
+    await touchRecentlyRead(payload.uid, payload.ep, payload.page, payload.totalPages);
+  } catch (err) {
+    console.warn("flushReadingProgressSync error:", err);
+  }
+};
+
 /**
  * Save reading progress for a chapter.
  * Writes to both the fast individual key AND the legacy array,
- * and updates the recently-read list.
+ * and updates the recently-read list (debounced for smoothness).
  */
 export const saveReadingProgress = async (
   uid:        string,
@@ -71,25 +104,15 @@ export const saveReadingProgress = async (
   totalPages: number = 0
 ): Promise<void> => {
   try {
-    // Fast path — individual key (used by new code)
+    // Fast path — individual key (immediate)
     await AsyncStorage.setItem(fastProgressKey(uid, ep), String(page));
 
-    // Legacy array update (used by any old callers)
-    const existing = await AsyncStorage.getItem(LEGACY_PROGRESS_KEY);
-    const progress: ReadingProgress[] = existing ? JSON.parse(existing) : [];
-    const idx = progress.findIndex((p) => p.uid === uid && p.ep === ep);
-    const entry: ReadingProgress = {
-      uid,
-      ep,
-      currentPage: page,
-      timestamp:   new Date().toISOString(),
-    };
-    if (idx >= 0) progress[idx] = entry;
-    else          progress.push(entry);
-    await AsyncStorage.setItem(LEGACY_PROGRESS_KEY, JSON.stringify(progress));
-
-    // Recently-read list
-    await touchRecentlyRead(uid, ep, page, totalPages);
+    // Queue debounced background sync for legacy array & recently read
+    pendingSyncPayload = { uid, ep, page, totalPages };
+    if (pendingSyncTimer) clearTimeout(pendingSyncTimer);
+    pendingSyncTimer = setTimeout(() => {
+      void flushReadingProgressSync();
+    }, 350);
   } catch (err) {
     console.warn("saveReadingProgress error:", err);
   }
