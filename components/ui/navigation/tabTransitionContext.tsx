@@ -12,11 +12,9 @@ const configuredDuration = Number(
   process.env.EXPO_PUBLIC_TAB_CHANGE_ANIMATION_DURATION,
 );
 const TAB_CHANGE_ANIMATION_DURATION =
-  Number.isFinite(configuredDuration) && configuredDuration >= 120 && configuredDuration <= 300
-    ? configuredDuration
+  Number.isFinite(configuredDuration) && configuredDuration >= 120
+    ? Math.min(configuredDuration, 240)
     : DEFAULT_TAB_CHANGE_ANIMATION_DURATION;
-
-console.log("TAB_CHANGE_ANIMATION_DURATION", TAB_CHANGE_ANIMATION_DURATION);
 
 type TabTransitionContextValue = {
   direction: -1 | 0 | 1;
@@ -93,7 +91,6 @@ export function useTabScreenAnimation(routeName: string) {
   const { direction, targetRoute, transitionKey, consumeTransition } =
     useTabTransition();
   const translateX = useSharedValue(0);
-  const opacity = useSharedValue(1);
   const { width } = useWindowDimensions();
 
   React.useEffect(() => {
@@ -107,19 +104,13 @@ export function useTabScreenAnimation(routeName: string) {
     // A short slide keeps the destination recognizable and avoids the heavy
     // full-screen sweep that made quick tab changes feel delayed.
     translateX.value = direction * width * 0.18;
-    opacity.value = 0.82;
     translateX.value = withTiming(0, {
       duration: TAB_CHANGE_ANIMATION_DURATION,
       easing: Easing.out(Easing.cubic),
     });
-    opacity.value = withTiming(1, {
-      duration: TAB_CHANGE_ANIMATION_DURATION,
-      easing: Easing.out(Easing.cubic),
-    });
-  }, [consumeTransition, direction, opacity, routeName, targetRoute, transitionKey, translateX, width]);
+  }, [consumeTransition, direction, routeName, targetRoute, transitionKey, translateX, width]);
 
   return useAnimatedStyle(() => ({
     transform: [{ translateX: translateX.value }],
-    opacity: opacity.value,
   }));
 }

@@ -9,10 +9,10 @@ import {
   ScrollView,
   ActivityIndicator,
   Alert,
-  Dimensions,
   RefreshControl,
   Modal,
   StyleSheet,
+  useWindowDimensions,
 } from "react-native";
 import { Image as ExpoImage } from "expo-image";
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -40,8 +40,6 @@ import Animated, {
   withTiming,
 } from "react-native-reanimated";
 import { useTabScreenAnimation, useTabTransition } from "../navigation/tabTransitionContext";
-
-const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get("window");
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -177,10 +175,15 @@ function applyFilters(list: MangaEntry[], filters: ActiveFilters): MangaEntry[] 
   });
 }
 
+function getMangaPageCount(manga: MangaEntry): number {
+  return manga.chapters.reduce((total, chapter) => total + chapter.pages, 0);
+}
+
 // ─── Image Sub-Components ─────────────────────────────────────────────────────
 
 const AutoHeightImage = React.memo(({ uri }: { uri: string }) => {
   const [aspectRatio, setAspectRatio] = useState(3 / 4);
+  const { height } = useWindowDimensions();
   useEffect(() => {
     let mounted = true;
     Image.getSize(`file://${uri}`, (w, h) => {
@@ -191,7 +194,7 @@ const AutoHeightImage = React.memo(({ uri }: { uri: string }) => {
   return (
     <ExpoImage
       source={{ uri: `file://${uri}` }}
-      style={{ width: "100%", aspectRatio, maxHeight: SCREEN_HEIGHT * 0.6, borderRadius: 12, backgroundColor: "#0f172a" }}
+      style={{ width: "100%", aspectRatio, maxHeight: height * 0.6, borderRadius: 12, backgroundColor: "#0f172a" }}
       contentFit="cover"
       transition={120}
       cachePolicy="memory-disk"
@@ -263,13 +266,13 @@ const MangaCardDetails = ({
   showTags?: boolean;
 }) => {
   const chapterCount = item.chapters.length;
-  const pageCount = item.chapters.reduce((total, chapter) => total + chapter.pages, 0);
+  const pageCount = getMangaPageCount(item);
   const activeChapter = item.chapters.find((chapter) => chapter.ep === recentEntry?.ep);
   const activePages = recentEntry?.totalPages || activeChapter?.pages || 0;
   const progress = recentEntry && activePages > 0
     ? Math.min((recentEntry.page + 1) / activePages, 1)
     : 0;
-  const labels = [...item.genres, ...item.tags].filter((value, index, all) => all.indexOf(value) === index);
+  const labels = Array.from(new Set([...item.genres, ...item.tags]));
 
   if (compact) {
     return (
@@ -425,7 +428,7 @@ const FlatCard = React.memo(({
             </View>
             <View>
               <CardMeta ep={chapter.ep} currentPage={chapterEntry?.page} totalPages={chapter.pages} />
-              <Text style={styles.flatCardInfo} numberOfLines={1}>{manga.chapters.length} ch · {manga.chapters.reduce((total, item) => total + item.pages, 0)} pg</Text>
+              <Text style={styles.flatCardInfo} numberOfLines={1}>{manga.chapters.length} ch · {getMangaPageCount(manga)} pg</Text>
             </View>
           </View>
       </View>
@@ -645,6 +648,7 @@ export const LibraryScreen = ({
 }: any) => {
   const tabAnimation = useTabScreenAnimation("index");
   const { setTabBarHidden } = useTabTransition();
+  const { width: screenWidth } = useWindowDimensions();
   const [manga, setManga] = useState<MangaEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -749,7 +753,7 @@ export const LibraryScreen = ({
   const librarySummary = useMemo(() => {
     const chapterCount = filtered.reduce((total, entry) => total + entry.chapters.length, 0);
     const pageCount = filtered.reduce(
-      (total, entry) => total + entry.chapters.reduce((pages, chapter) => pages + chapter.pages, 0),
+      (total, entry) => total + getMangaPageCount(entry),
       0,
     );
     return `${filtered.length} ${filtered.length === 1 ? "title" : "titles"} · ${chapterCount} chapters · ${pageCount} pages`;
@@ -784,8 +788,8 @@ export const LibraryScreen = ({
 
   const numColumns = layout === "grid" ? 2 : layout === "compact" ? 4 : 1;
   const itemWidth = useMemo(
-    () => (numColumns === 1 ? ("100%" as const) : (SCREEN_WIDTH - (numColumns + 1) * 12) / numColumns),
-    [numColumns]
+    () => (numColumns === 1 ? ("100%" as const) : (screenWidth - (numColumns + 1) * 12) / numColumns),
+    [numColumns, screenWidth]
   );
 
   const renderFlatItem = useCallback(
