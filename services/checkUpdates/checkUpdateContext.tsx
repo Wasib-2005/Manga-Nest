@@ -1,4 +1,5 @@
 import { createContext } from "react";
+import { APP_VERSION } from "@/constants/app-version";
 
 // Define the shape of our context state
 interface CheckUpdateContextType {
@@ -14,8 +15,8 @@ interface CheckUpdateContextType {
 // Initialize with a proper default object
 export const CheckUpdateContext = createContext<CheckUpdateContextType>({
   isChecking: false,
-  latestVersion: process.env.EXPO_PUBLIC_APP_VERSION || "0.0.1",
-  currentVersion: process.env.EXPO_PUBLIC_APP_VERSION || "0.0.1",
+  latestVersion: APP_VERSION,
+  currentVersion: APP_VERSION,
   error: null,
   checkForUpdates: async () => {},
   isUpdateAvailable: false,

@@ -1,11 +1,10 @@
 import React, { useState, ReactNode, useEffect } from "react";
+import { APP_VERSION } from "@/constants/app-version";
 import { CheckUpdateContext } from "./checkUpdateContext";
 
 interface ProviderProps {
   children: ReactNode;
 }
-
-const currentVersionEnv = process.env.EXPO_PUBLIC_APP_VERSION || "0.0.1";
 
 // Helper function to safely compare Semantic Versions (e.g., "1.0.4" vs "1.0.3")
 // Returns 1 if v1 > v2, -1 if v1 < v2, and 0 if they are equal
@@ -50,7 +49,7 @@ export const CheckUpdateProvider = ({ children }: ProviderProps) => {
       if (data && data.tag_name) {
         // Clean up 'v' prefixes
         const cleanedLatest = data.tag_name.replace(/^v/, "");
-        const cleanedCurrent = currentVersionEnv.replace(/^v/, "");
+        const cleanedCurrent = APP_VERSION.replace(/^v/, "");
 
         setLatestVersion(cleanedLatest);
 
@@ -79,7 +78,7 @@ export const CheckUpdateProvider = ({ children }: ProviderProps) => {
         isChecking,
         latestVersion,
         error,
-        currentVersion: currentVersionEnv,
+        currentVersion: APP_VERSION,
         checkForUpdates,
         isUpdateAvailable,
       }}

@@ -1,120 +1,94 @@
 #!/usr/bin/env fish
 
-# Build an Android APK locally and optionally send it to a KDE Connect device.
-
 set -l target_device_id ""
 set -l target_device_name ""
-set -l project_dir (pwd)
-set -l current_project (basename "$project_dir")
 
-function send_notification --argument-names message
+# 1. Device Selection via Arrow Keys (fzf)
+while true
+    set -l raw_devices (kdeconnect-cli -l 2>/dev/null | grep "^- ")
+    set -l fzf_options
+
+    # Format connected devices for the menu
+    for line in $raw_devices
+        set -l clean_line (string replace -r '^- ' '' -- $line)
+        set -a fzf_options $clean_line
+    end
+
+    # Append control options to the list
+    set -a fzf_options "Refresh list"
+    set -a fzf_options "Cancel transfer (Build only)"
+
+    # Run fzf with arrow keys enabled
+    echo ""
+    echo "Fetching active KDE Connect devices..."
+    set -l selected (printf "%s\n" $fzf_options | fzf --height=10 --layout=reverse --header="Select a target (Use Arrow Keys + Enter):")
+
+    # Handle user selection or ESC/Cancel
+    if test -z "$selected"; or string match -q "*Cancel transfer*" -- "$selected"
+        echo "Proceeding with build only."
+        break
+    else if string match -q "*Refresh list*" -- "$selected"
+        echo "Refreshing..."
+        continue
+    else
+        # Extract name before the colon
+        set -l clean_selection (string replace -r ' \(.*\)$' '' -- $selected)
+        set -l parts (string split ": " -- $clean_selection)
+        set target_device_name $parts[1]
+
+        # Isolate ONLY the hex UUID (stripping ' on 10.x.x.x via LAN')
+        set target_device_id (string replace -r ' .*' '' -- $parts[2])
+
+        echo (set_color green)"Target set to: $target_device_name ($target_device_id)"(set_color normal)
+        break
+    end
+end
+
+set -l current_project (basename $PWD)
+
+# 2. Before Build Notification
+if test -n "$target_device_id"
+    kdeconnect-cli -d $target_device_id --ping-msg "Build started for $current_project!"
+end
+
+echo ""
+echo (set_color cyan)"Starting local EAS production build..."(set_color normal)
+echo ""
+
+# 3. Environment & EAS Build Execution
+set -x JAVA_HOME /home/waslla/.sdkman/candidates/java/17.0.10-tem
+set -x PATH $JAVA_HOME/bin $PATH
+
+set -x ANDROID_HOME $HOME/Android/Sdk
+set -x ANDROID_NDK_HOME $ANDROID_HOME/ndk/27.1.12297006
+set -Ua fish_user_paths $ANDROID_HOME/cmdline-tools/latest/bin $ANDROID_HOME/platform-tools $ANDROID_NDK_HOME
+
+set -x NODE_ENV production
+
+eas build --platform android --profile production --local
+set -l build_status $status
+
+# 4. After Build Handling
+if test $build_status -ne 0
+    echo (set_color red)"Build failed!"(set_color normal)
     if test -n "$target_device_id"
-        kdeconnect-cli -d "$target_device_id" --ping-msg "$message"
+        kdeconnect-cli -d $target_device_id --ping-msg "❌ Build failed for $current_project. Check terminal logs."
     end
-end
-
-function choose_device
-    if not type -q kdeconnect-cli
-        echo "KDE Connect was not found. Building without device transfer."
-        return
-    end
-
-    if not type -q fzf
-        echo "fzf was not found. Building without device transfer."
-        return
-    end
-
-    while true
-        set -l raw_devices (kdeconnect-cli -l 2>/dev/null | string match -r '^- .*')
-        set -l options
-
-        for line in $raw_devices
-            set -a options (string replace -r '^- ' '' -- "$line")
-        end
-
-        set -a options "Build without transfer" "Refresh device list"
-
-        echo ""
-        echo "Fetching available KDE Connect devices..."
-        set -l selected (printf "%s\n" $options | fzf --height=10 --layout=reverse --header="Select a target (Arrow Keys + Enter)")
-
-        if test -z "$selected"; or test "$selected" = "Build without transfer"
-            return
-        end
-
-        if test "$selected" = "Refresh device list"
-            continue
-        end
-
-        set -l device_line (string replace -r ' \(.*\)$' '' -- "$selected")
-        set target_device_name (string replace -r ':.*$' '' -- "$device_line")
-        set -l id_section (string replace -r '^[^:]+:\s*' '' -- "$device_line")
-        set target_device_id (string replace -r '\s.*$' '' -- "$id_section")
-
-        if test -n "$target_device_id"
-            echo (set_color green)"Target set to: $target_device_name"(set_color normal)
-            return
-        end
-
-        echo (set_color yellow)"Could not read that device ID. Try refreshing the list."(set_color normal)
-    end
-end
-
-if not type -q eas
-    echo (set_color red)"EAS CLI was not found. Install it, then run this script again."(set_color normal)
     exit 1
 end
 
-choose_device
-
-if not set -q JAVA_HOME; and test -d "$HOME/.sdkman/candidates/java/current"
-    set -lx JAVA_HOME "$HOME/.sdkman/candidates/java/current"
-end
-
-if test -n "$JAVA_HOME"
-    set -lx PATH "$JAVA_HOME/bin" $PATH
-end
-
-if not set -q ANDROID_HOME
-    set -lx ANDROID_HOME "$HOME/Android/Sdk"
-end
-
-if test -d "$ANDROID_HOME/cmdline-tools/latest/bin"
-    set -lx PATH "$ANDROID_HOME/cmdline-tools/latest/bin" $PATH
-end
-
-if test -d "$ANDROID_HOME/platform-tools"
-    set -lx PATH "$ANDROID_HOME/platform-tools" $PATH
-end
-
-set -l output_dir "$project_dir/dist"
-set -l timestamp (date "+%Y%m%d-%H%M%S")
-set -l build_file "$output_dir/$current_project-$timestamp.apk"
-mkdir -p "$output_dir"
-
-send_notification "Build started for $current_project"
-echo ""
-echo (set_color cyan)"Starting local Android production build..."(set_color normal)
-echo "Output: $build_file"
-echo ""
-
-eas build --platform android --profile production --local --output "$build_file"
-set -l build_status $status
-
-if test $build_status -ne 0
-    echo (set_color red)"Build failed. Check the terminal output above."(set_color normal)
-    send_notification "Build failed for $current_project. Check the terminal logs."
-    exit $build_status
-end
-
-echo (set_color green)"Build completed: $build_file"(set_color normal)
+echo (set_color green)"Build completed successfully!"(set_color normal)
 
 if test -n "$target_device_id"
-    echo "Sending APK to $target_device_name..."
-    if kdeconnect-cli -d "$target_device_id" --share "$build_file"
-        send_notification "Build finished. $current_project APK was sent successfully."
+    # Find the newest generated build file (.apk or .aab)
+    set -l build_file (ls -t *.{apk,aab} 2>/dev/null | head -n 1)
+
+    if test -n "$build_file"
+        echo "Sending $build_file to $target_device_name..."
+        kdeconnect-cli -d $target_device_id --share $build_file
+        kdeconnect-cli -d $target_device_id --ping-msg "Build finished! $build_file sent successfully."
     else
-        echo (set_color yellow)"The APK was built, but the transfer failed."(set_color normal)
-        send_notification "Build finished, but the APK transfer failed."
+        echo (set_color yellow)"Could not locate the generated build file (.apk or .aab) dynamically."(set_color normal)
+        kdeconnect-cli -d $target_device_id --ping-msg "Build finished, but couldn't locate the file to transfer."
     end
 end

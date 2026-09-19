@@ -10,6 +10,7 @@ import {
 } from "react-native";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import Animated, { FadeIn, FadeInDown } from "react-native-reanimated";
+import { APP_VERSION } from "@/constants/app-version";
 import { useTabScreenAnimation } from "../../components/ui/navigation/tabTransitionContext";
 
 // ─── Config ───────────────────────────────────────────────────────────────────
@@ -18,11 +19,6 @@ const GITHUB_USER = "Wasib-2005";
 const GITHUB_REPO = "Manga-Nest";
 const RELEASES_URL = `https://api.github.com/repos/${GITHUB_USER}/${GITHUB_REPO}/releases/latest`;
 const RELEASES_PAGE = `https://github.com/${GITHUB_USER}/${GITHUB_REPO}/releases`;
-
-// Bump this every build — format must match GitHub tag e.g. "v1.0.1"
-const CURRENT_VERSION = process.env.EXPO_PUBLIC_APP_VERSION || "v0.0.1";
-
-console.log("CURRENT_VERSION", CURRENT_VERSION);
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -104,7 +100,7 @@ export default function CheckUpdate() {
       const data: Release = await res.json();
       setRelease(data);
 
-      if (isNewer(data.tag_name, CURRENT_VERSION)) {
+      if (isNewer(data.tag_name, APP_VERSION)) {
         setState("update-available");
       } else {
         setState("up-to-date");
@@ -176,7 +172,7 @@ export default function CheckUpdate() {
             </View>
             <View>
               <Text style={s.versionLabel}>Installed version</Text>
-              <Text style={s.versionValue}>{CURRENT_VERSION}</Text>
+              <Text style={s.versionValue}>{APP_VERSION}</Text>
             </View>
           </View>
 

@@ -135,6 +135,22 @@ fish build-android.fish
 
 The script optionally sends the finished APK to a selected KDE Connect device. Builds are saved in `dist/` with a timestamped filename.
 
+### Managing release versions
+
+Check that every release-facing version is aligned:
+
+```bash
+npm run version:check
+```
+
+Set a new release version in one step. This updates `package.json`, `app.json`, and `.env` together:
+
+```bash
+npm run version:set -- 1.1.1
+```
+
+Create the matching GitHub release tag as `v1.1.1` after publishing the build.
+
 ---
 
 ## 🧩 Adding a New Scraper
