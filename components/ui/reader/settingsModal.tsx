@@ -13,7 +13,12 @@ import {
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
 import type { ViewMode } from "./pageViewer";
-import { setTitlePage, clearTitlePage } from "../../../services/reader/libraryService";
+import {
+  setChapterTitlePage,
+  setTitlePage,
+  clearChapterTitlePage,
+  clearTitlePage,
+} from "../../../services/reader/libraryService";
 
 interface Props {
   visible: boolean;
@@ -136,33 +141,52 @@ export const SettingsModal = ({
     onSpeedChange(Math.min(30, Math.max(0.2, next)));
   };
 
-  // ── Title-page toggle ─────────────────────────────────────────────────────
+  const handleCoverPagePress = () => {
+    Alert.alert(
+      "Set Cover Page",
+      `Use page ${currentPage + 1} of EP ${currentEp} as the cover for:`,
+      [
+        {
+          text: "This EP",
+          onPress: () => saveCoverPage("chapter"),
+        },
+        {
+          text: "This Manga",
+          onPress: () => saveCoverPage("manga"),
+        },
+        { text: "Cancel", style: "cancel" },
+      ],
+    );
+  };
 
-  const handleTitlePageToggle = async (value: boolean) => {
+  const saveCoverPage = async (scope: "chapter" | "manga") => {
     if (titlePageSaving) return;
     setTitlePageSaving(true);
     try {
-      if (value) {
-        await setTitlePage(mangaUid, currentEp, currentPage);
-        setIsTitlePage(true);
-        onTitlePageChanged?.();
-        Alert.alert(
-          "Title Page Set",
-          `Page ${currentPage + 1} of EP ${currentEp} is now the cover image.`,
-          [{ text: "OK" }],
-        );
+      if (scope === "chapter") {
+        await setChapterTitlePage(mangaUid, currentEp, currentPage);
       } else {
-        await clearTitlePage(mangaUid);
-        setIsTitlePage(false);
-        onTitlePageChanged?.();
-        Alert.alert(
-          "Title Page Cleared",
-          "Cover image reverted to the first page.",
-          [{ text: "OK" }],
-        );
+        await setTitlePage(mangaUid, currentEp, currentPage);
       }
+      setIsTitlePage(true);
+      onTitlePageChanged?.();
     } catch {
-      Alert.alert("Error", "Failed to update title page.");
+      Alert.alert("Error", "Failed to update cover page.");
+    } finally {
+      setTitlePageSaving(false);
+    }
+  };
+
+  const clearCoverPage = async () => {
+    if (titlePageSaving) return;
+    setTitlePageSaving(true);
+    try {
+      await clearChapterTitlePage(mangaUid, currentEp);
+      await clearTitlePage(mangaUid);
+      setIsTitlePage(false);
+      onTitlePageChanged?.();
+    } catch {
+      Alert.alert("Error", "Failed to revert cover page.");
     } finally {
       setTitlePageSaving(false);
     }
@@ -368,7 +392,7 @@ export const SettingsModal = ({
               {/* Cover card */}
               <TouchableOpacity
                 activeOpacity={0.75}
-                onPress={() => handleTitlePageToggle(!isTitlePage)}
+                onPress={handleCoverPagePress}
                 style={[s.imageCard, isTitlePage && s.imageCardActive]}
               >
                 <View style={[s.imageCardIcon, isTitlePage && s.imageCardIconActive]}>
@@ -388,7 +412,7 @@ export const SettingsModal = ({
                 </Text>
                 {isTitlePage && (
                   <TouchableOpacity
-                    onPress={() => handleTitlePageToggle(false)}
+                    onPress={() => void clearCoverPage()}
                     style={s.imageCardClear}
                     activeOpacity={0.7}
                     hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}

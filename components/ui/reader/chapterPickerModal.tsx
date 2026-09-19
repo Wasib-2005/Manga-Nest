@@ -5,7 +5,6 @@ import {
   Modal,
   TouchableOpacity,
   FlatList,
-  Alert,
   StyleSheet,
   Image,
   Dimensions,
@@ -13,7 +12,7 @@ import {
 } from "react-native";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import {
-  getFirstPageUri,
+  getChapterFirstPageUri,
   type ChapterInfo,
 } from "../../../services/reader/libraryService";
 
@@ -24,7 +23,7 @@ const CARD_WIDTH = (SCREEN_WIDTH - COLUMN_SPACING * 3) / 2;
 const ChapterThumbnail = ({ uid, ep }: { uid: string; ep: string }) => {
   const [uri, setUri] = useState<string | null>(null);
   useEffect(() => {
-    getFirstPageUri(uid, ep).then(setUri);
+    getChapterFirstPageUri(uid, ep).then(setUri);
   }, [uid, ep]);
 
   if (!uri)
@@ -40,7 +39,7 @@ const ChapterThumbnail = ({ uid, ep }: { uid: string; ep: string }) => {
 
   return (
     <Image
-      source={{ uri: `file://${uri}` }}
+      source={{ uri }}
       style={styles.chapterImage}
       resizeMode="contain"
     />

@@ -21,6 +21,7 @@ export interface DbChapter {
   ep: string;
   pages: number;
   savedAt: string;
+  titlePageNum: number | null;
 }
 
 const root = () => new Directory(Paths.document, "manga");
@@ -207,6 +208,7 @@ export async function initializeDatabase(): Promise<SQLiteDatabase> {
         ep TEXT NOT NULL,
         pages INTEGER NOT NULL DEFAULT 0,
         saved_at TEXT NOT NULL,
+        title_page_num INTEGER,
         PRIMARY KEY (uid, ep)
       );
       CREATE TABLE IF NOT EXISTS tags (
@@ -234,6 +236,12 @@ export async function initializeDatabase(): Promise<SQLiteDatabase> {
       CREATE INDEX IF NOT EXISTS manga_tags_uid_idx ON manga_tags(uid);
       CREATE INDEX IF NOT EXISTS manga_genres_uid_idx ON manga_genres(uid);
     `);
+    const chapterColumns = await db.getAllAsync<{ name: string }>(
+      "PRAGMA table_info(chapters)",
+    );
+    if (!chapterColumns.some((column) => column.name === "title_page_num")) {
+      await db.execAsync("ALTER TABLE chapters ADD COLUMN title_page_num INTEGER");
+    }
     await migrateLegacyJson(db);
     return db;
   })();
@@ -323,6 +331,29 @@ export async function clearTitlePage(uid: string): Promise<void> {
   );
 }
 
+export async function setChapterTitlePage(
+  uid: string,
+  ep: string,
+  pageNum: number,
+): Promise<void> {
+  const db = await initializeDatabase();
+  await db.runAsync(
+    "UPDATE chapters SET title_page_num = ? WHERE uid = ? AND ep = ?",
+    pageNum,
+    uid,
+    ep,
+  );
+}
+
+export async function clearChapterTitlePage(uid: string, ep: string): Promise<void> {
+  const db = await initializeDatabase();
+  await db.runAsync(
+    "UPDATE chapters SET title_page_num = NULL WHERE uid = ? AND ep = ?",
+    uid,
+    ep,
+  );
+}
+
 export async function upsertChapter(
   uid: string,
   ep: string,
@@ -403,7 +434,9 @@ export async function listManga(): Promise<(DbManga & { tags: string[]; genres: 
        JOIN manga_genres mg ON mg.genre_id = g.id ORDER BY mg.uid, g.name`,
     ),
     db.getAllAsync<DbChapter>(
-      `SELECT uid, ep, pages, saved_at AS savedAt FROM chapters
+      `SELECT uid, ep, pages, saved_at AS savedAt,
+              title_page_num AS titlePageNum
+       FROM chapters
        ORDER BY uid, saved_at ASC`,
     ),
   ]);

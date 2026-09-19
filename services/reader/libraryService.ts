@@ -2,11 +2,13 @@ import { Directory, File, Paths } from "expo-file-system";
 import * as FileSystemLegacy from "expo-file-system/legacy";
 import {
   clearTitlePage as clearTitlePageDb,
+  clearChapterTitlePage as clearChapterTitlePageDb,
   deleteChapter,
   deleteManga,
   initializeDatabase,
   listManga,
   renameChapter,
+  setChapterTitlePage as setChapterTitlePageDb,
   updateManga,
 } from "./database";
 
@@ -14,6 +16,7 @@ export interface ChapterInfo {
   ep: string;
   pages: number;
   savedAt: string;
+  titlePageNum: number | null;
 }
 
 export interface MangaEntry {
@@ -30,10 +33,35 @@ export interface MangaEntry {
 }
 
 const coverCache = new Map<string, string>();
+const chapterFirstPageCache = new Map<string, string>();
 
 export const invalidateCover = (uid?: string) => {
-  if (uid) coverCache.delete(uid);
-  else coverCache.clear();
+  if (uid) {
+    coverCache.delete(uid);
+    for (const key of chapterFirstPageCache.keys()) {
+      if (key.startsWith(`${uid}:`)) chapterFirstPageCache.delete(key);
+    }
+  } else {
+    coverCache.clear();
+    chapterFirstPageCache.clear();
+  }
+};
+
+export const setChapterTitlePage = async (
+  uid: string,
+  ep: string,
+  pageNum: number,
+): Promise<void> => {
+  await setChapterTitlePageDb(uid, ep, pageNum);
+  invalidateCover(uid);
+};
+
+export const clearChapterTitlePage = async (
+  uid: string,
+  ep: string,
+): Promise<void> => {
+  await clearChapterTitlePageDb(uid, ep);
+  invalidateCover(uid);
 };
 
 const getRoot = () => new Directory(Paths.document, "manga");
@@ -184,6 +212,29 @@ export const getFirstPageUri = async (
   } catch {
     return null;
   }
+};
+
+/**
+ * Returns the first image from the requested chapter.
+ *
+ * Unlike getFirstPageUri, this intentionally ignores the manga-level title
+ * page override because every chapter thumbnail represents its own chapter.
+ */
+export const getChapterFirstPageUri = async (
+  uid: string,
+  ep: string,
+): Promise<string | null> => {
+  const cacheKey = `${uid}:${ep}`;
+  const cached = chapterFirstPageCache.get(cacheKey);
+  if (cached) return cached;
+
+  const pages = await getChapterPages(uid, ep);
+  const chapter = (await listManga())
+    .find((manga) => manga.uid === uid)
+    ?.chapters.find((chapter) => chapter.ep === ep);
+  const result = pages[chapter?.titlePageNum ?? 0] ?? pages[0] ?? null;
+  if (result) chapterFirstPageCache.set(cacheKey, result);
+  return result;
 };
 
 /** Renames a chapter folder and updates its relational chapter record. */
